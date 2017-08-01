@@ -2,7 +2,7 @@
   "name": "bachmans-common",
   "version": "0.0.1",
   "description": "shared functionality across bachmans apps",
-  "main": "gulpfile.js",
+  "main": "dist/script.min.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
