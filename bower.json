@@ -1,0 +1,15 @@
+{
+  "name": "bachmans-common",
+  "description": "shared functionality across bachmans apps",
+  "main": "dist/script.min.js",
+  "authors": [
+    "Crhistian Ramirez"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/crhistianr/bachmans-common",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components"
+  ]
+}
