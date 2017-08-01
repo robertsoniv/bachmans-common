@@ -1,0 +1,56 @@
+
+angular.module('orderCloud')
+    .factory('ocBuyerXp', ocBuyerXpService)
+;
+
+function ocBuyerXpService($q, $http, $interval, nodeapiurl){
+    var buyerxpurl = nodeapiurl + '/buyerxp';
+    var buyerxp = null;
+    var hasBeenCalled = false;
+    var service = {
+        Get: _get,
+        Update: _update,
+        Patch: _patch
+    };
+
+    function _get(token){
+        var dfd = $q.defer();
+
+        if(buyerxp){
+            dfd.resolve(buyerxp);
+        } else if(hasBeenCalled){
+            waitForResponse();
+        } else {
+            hasBeenCalled = true;
+            $http.get(buyerxpurl, {headers: {'oc-token': token}})
+                .then(function(response){
+                    buyerxp = {xp: response.data};
+                    dfd.resolve(buyerxp);
+                })
+                .catch(function(ex){
+                    dfd.reject(ex);
+                });
+            }
+
+        function waitForResponse(){
+            var check = $interval(function(){
+                if(buyerxp){
+                    $interval.cancel(check);
+                    dfd.resolve(buyerxp);
+                }
+            }, 100);
+        }
+
+        return dfd.promise;
+    }
+
+    function _update(token, update){
+        return $http.put(buyerxpurl, update, {headers: {'oc-token': token}});
+    }
+
+    function _patch(patch, token){
+        return $http.patch(buyerxpurl, patch, {headers: {'oc-token': token}});
+    }
+
+    return service;
+}

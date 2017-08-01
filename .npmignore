@@ -1,0 +1,4 @@
+src/
+gulpfile.js
+package-lock.json
+dist/script.js

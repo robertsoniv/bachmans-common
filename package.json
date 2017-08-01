@@ -1,0 +1,19 @@
+{
+  "name": "bachmans-common",
+  "version": "0.0.1",
+  "description": "shared functionality across bachmans apps",
+  "main": "gulpfile.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Crhistian Ramirez",
+  "license": "MIT",
+  "devDependencies": {
+    "gulp": "^3.8.7",
+    "gulp-concat": "^2.3.4",
+    "gulp-ng-annotate": "^0.3.0",
+    "gulp-rename": "^1.2.0",
+    "gulp-sourcemaps": "^1.1.1",
+    "gulp-uglify": "^0.3.1"
+  }
+}
