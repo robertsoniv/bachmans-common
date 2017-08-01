@@ -1,7 +1,7 @@
 angular.module('bachmans-common', [
 
 ]);
-angular.module('orderCloud')
+angular.module('bachmans-common')
     .config(OrderCloudSDKAnonAdditions)
 ;
 
@@ -88,7 +88,7 @@ function OrderCloudSDKBuyerXP($provide){
 }
 OrderCloudSDKBuyerXP.$inject = ['$provide'];
 
-angular.module('orderCloud')
+angular.module('bachmans-common')
     .factory('ocBuyerXp', ocBuyerXpService)
 ;
 
@@ -144,7 +144,7 @@ function ocBuyerXpService($q, $http, $interval, nodeapiurl){
     return service;
 }
 ocBuyerXpService.$inject = ['$q', '$http', '$interval', 'nodeapiurl'];
-angular.module('orderCloud')
+angular.module('bachmans-common')
     .factory('ocGiftCards', ocGiftCards)
 ;
 
