@@ -1,4 +1,4 @@
-angular.module('orderCloud')
+angular.module('bachmans-common')
     .factory('ocGiftCards', ocGiftCards)
 ;
 
