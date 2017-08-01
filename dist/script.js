@@ -57,17 +57,17 @@ angular.module('bachmans-common')
 
 
 function OrderCloudSDKBuyerXP($provide){
-    $provide.decorator('OrderCloudSDK', ['$delegate', 'ocBuyerXp', '$q', function($delegate, ocBuyerXp, $q){
+    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
         $delegate.Buyers.Get = function(){
             var token = $delegate.GetToken();
-            return ocBuyerXp.Get(token);
+            return bachBuyerXp.Get(token);
         };
 
         $delegate.Buyers.Update = function(){
             var update = [].slice.call(arguments)[1]; //update obj is second argument
             var token = $delegate.GetToken();
             if(update && update.xp) {
-                return ocBuyerXp.Update(token, update.xp);
+                return bachBuyerXp.Update(token, update.xp);
             } else {
                 return $q.reject('Missing body');
             }
@@ -77,7 +77,7 @@ function OrderCloudSDKBuyerXP($provide){
             var patch = [].slice.call(arguments)[1]; //patch obj is second argument
             var token = $delegate.GetToken();
             if(patch) {
-                return ocBuyerXp.Patch(token, patch);
+                return bachBuyerXp.Patch(token, patch);
             } else {
                 return $q.reject('Missing body');
             }
