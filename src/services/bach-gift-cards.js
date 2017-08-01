@@ -1,8 +1,8 @@
 angular.module('bachmans-common')
-    .factory('ocGiftCards', ocGiftCards)
+    .factory('bachGiftCards', bachGiftCards)
 ;
 
-function ocGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr){
+function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr){
     var service = {
         Create: _create,
         Update: _update,

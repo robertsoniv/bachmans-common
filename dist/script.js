@@ -89,10 +89,10 @@ function OrderCloudSDKBuyerXP($provide){
 OrderCloudSDKBuyerXP.$inject = ['$provide'];
 
 angular.module('bachmans-common')
-    .factory('ocBuyerXp', ocBuyerXpService)
+    .factory('bachBuyerXp', bachBuyerXpService)
 ;
 
-function ocBuyerXpService($q, $http, $interval, nodeapiurl){
+function bachBuyerXpService($q, $http, $interval, nodeapiurl){
     var buyerxpurl = nodeapiurl + '/buyerxp';
     var buyerxp = null;
     var hasBeenCalled = false;
@@ -143,12 +143,12 @@ function ocBuyerXpService($q, $http, $interval, nodeapiurl){
 
     return service;
 }
-ocBuyerXpService.$inject = ['$q', '$http', '$interval', 'nodeapiurl'];
+bachBuyerXpService.$inject = ['$q', '$http', '$interval', 'nodeapiurl'];
 angular.module('bachmans-common')
-    .factory('ocGiftCards', ocGiftCards)
+    .factory('bachGiftCards', bachGiftCards)
 ;
 
-function ocGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr){
+function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr){
     var service = {
         Create: _create,
         Update: _update,
@@ -200,4 +200,4 @@ function ocGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr){
 
     return service;
 }
-ocGiftCards.$inject = ['nodeapiurl', '$resource', '$cookies', 'ocAppName', 'toastr'];
+bachGiftCards.$inject = ['nodeapiurl', '$resource', '$cookies', 'ocAppName', 'toastr'];

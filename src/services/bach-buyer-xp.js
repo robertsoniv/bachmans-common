@@ -1,9 +1,9 @@
 
 angular.module('bachmans-common')
-    .factory('ocBuyerXp', ocBuyerXpService)
+    .factory('bachBuyerXp', bachBuyerXpService)
 ;
 
-function ocBuyerXpService($q, $http, $interval, nodeapiurl){
+function bachBuyerXpService($q, $http, $interval, nodeapiurl){
     var buyerxpurl = nodeapiurl + '/buyerxp';
     var buyerxp = null;
     var hasBeenCalled = false;
