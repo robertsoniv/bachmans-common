@@ -7,6 +7,7 @@ function OrderCloudSDKAnonAdditions($provide){
         var cookiePrefix = ocAppName.Watch().replace(/ /g, '_').toLowerCase();
         var anonCookieName = cookiePrefix + 'anonymous.token';
         var impersonationCookieName = cookiePrefix + 'impersonate.token';
+        var adminCookieName = cookiePrefix + 'admin.token';
         
         // enables use of As(), AsAnon(), and AsAdmin()
         // so that we can easily tell under which context
@@ -28,6 +29,14 @@ function OrderCloudSDKAnonAdditions($provide){
             $cookies.put(impersonationCookieName, token);
         };
 
+        $delegate.SetAdminToken = function(token){
+            $cookies.put(adminCookieName, token);
+        };
+
+        $delegate.RemoveAdminToken = function(){
+            $cookies.remove(adminCookieName);
+        };
+        
         var originalAs = $delegate.As;
 
         $delegate.As = function(){
