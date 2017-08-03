@@ -2,12 +2,13 @@ angular.module('bachmans-common')
     .factory('bachGiftCards', bachGiftCards)
 ;
 
-function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr){
+function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http){
     var service = {
         Create: _create,
         Update: _update,
         Delete: _delete,
-        List: _list
+        List: _list,
+        Purchase: _purchase
     };
 
     function _create(req){
@@ -28,6 +29,10 @@ function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr){
             .then(function(results){
                 return results.list;
             });
+    }
+
+    function _purchase(req){
+        return $http.post(nodeapiurl + '/giftcards/purchase/' + req.orderid, {}, {headers: {'oc-token': getToken()}});
     }
     
     function GiftCards(){
