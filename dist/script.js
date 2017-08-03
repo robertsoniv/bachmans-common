@@ -67,6 +67,10 @@ function OrderCloudSDKAnonAdditions($provide){
             $cookies.put(impersonationCookieName, token);
         };
 
+        $delegate.GetAdminToken = function(){
+            return $cookies.get(adminCookieName);
+        };
+
         $delegate.SetAdminToken = function(token){
             $cookies.put(adminCookieName, token);
         };
@@ -88,7 +92,7 @@ function OrderCloudSDKAnonAdditions($provide){
         };
 
         $delegate.AsAdmin = function(){
-            var adminToken = $delegate.GetToken();
+            var adminToken = $delegate.GetAdminToken();
             return originalAs(adminToken);
         };
 
