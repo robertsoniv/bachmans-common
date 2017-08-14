@@ -1,7 +1,8 @@
 angular.module('bachmans-common', [
 
 ]);
-angular.module('bachmans-common')
+
+OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
     .config(OrderCloudSDKBuyerXP);
 
 
@@ -51,8 +52,8 @@ function OrderCloudSDKBuyerXP($provide){
         return $delegate;
     }]);
 }
-OrderCloudSDKBuyerXP.$inject = ['$provide'];
 
+bachBuyerXpService.$inject = ['$q', '$http', '$interval', 'nodeapiurl'];
 angular.module('bachmans-common')
     .factory('bachBuyerXp', bachBuyerXpService)
 ;
@@ -108,66 +109,266 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
 
     return service;
 }
-bachBuyerXpService.$inject = ['$q', '$http', '$interval', 'nodeapiurl'];
-angular.module('bachmans-common')
-    .factory('bachGiftCards', bachGiftCards)
+
+bachShipmentsService.$inject = ['$q', 'buyerid'];angular.module('orderCloud')
+    .factory('bachShipments', bachShipmentsService)
 ;
 
-function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http){
+function bachShipmentsService($q, buyerid){
     var service = {
-        Create: _create,
-        Update: _update,
-        Delete: _delete,
-        List: _list,
-        Purchase: _purchase
+        Breakup: _breakup
     };
 
-    function _create(req){
-        return GiftCards().create(req).$promise;
-    }
-
-    function _update(req){
-        if(!req.body && !req.body.id) return toastr.error('id is a required parameter');
-        return GiftCards().update({id: req.body.id}, req.body).$promise;
-    }
-
-    function _delete(req){
-        return GiftCards().delete({id: req.id}).$promise;
-    }
-
-    function _list(req){
-        return GiftCards().list(req && req.searchTerm ? {searchTerm: req.searchTerm} : null).$promise
-            .then(function(results){
-                return results.list;
+    function _breakup(lineitems, orderid, deliverydate){
+        return splitByUniqueRecipient([lineitems])
+            .then(splitByShipTo)
+            .then(splitByDeliveryDate)
+            .then(splitByShippingMethod)
+            .then(function(shipments){
+                createShipments(shipments, orderid, deliverydate);
             });
     }
 
-    function _purchase(req){
-        return $http.post(nodeapiurl + '/giftcards/purchase/' + req.orderid, {}, {headers: {'oc-token': getToken()}});
-    }
-    
-    function GiftCards(){
-        var methods = {
-            create: {method: 'POST'},
-            update: {method: 'PUT'},
-            delete: {method: 'DELETE'},
-            list: {method: 'GET'}
+
+    function splitByUniqueRecipient(lineitems){
+        // every line item with a unique recipient must be a unique shipment
+        var iteratee = function(lineitem){
+            return (lineitem.ShippingAddress.FirstName + lineitem.ShippingAddress.LastName).replace(/ /g, '').toLowerCase();
         };
-        _.each(methods, function(method){
-            method.headers = {
-                'oc-token': getToken()
+        return splitShipments(lineitems, iteratee);
+    }
+
+    function splitByShipTo(shipments){
+        // every line item with a unique ship to address must be a unique shipment
+        var iteratee = function(lineitem){
+            var stringifiedShipTo = _.values(_.pick(lineitem.ShippingAddress, 'Street1', 'Street2', 'City', 'State', 'Zip', 'Country')).join('').replace(/ /g, '').toLowerCase();
+            return stringifiedShipTo;
+        };
+        return splitShipments(shipments, iteratee);
+    }
+
+    function splitByDeliveryDate(shipments){
+        // every line item with a unique requested delivery date must be a unique shipment
+        var iteratee = function(lineitem){
+            return lineitem.xp.DeliveryDate;
+        };
+        return splitShipments(shipments, iteratee);
+    }
+
+    function splitByShippingMethod(shipments){
+        // every line item with a unique shipping method must be a unique shipment
+        var iteratee = function(lineitem){
+            return lineitem.xp.DeliveryMethod;
+        };
+        return splitShipments(shipments, iteratee);
+    }
+
+    function createShipments(shipments, orderid, deliverydate){
+        _.each(shipments, function(shipment, index){
+            var items = [];
+            var shipmentCost = 0;
+            _.each(shipment, function(lineitem){
+                items.push({
+                    'OrderID': lineitem.OrderID,
+                    'LineItemID': lineitem.ID,
+                    'QuantityShipped': lineitem.Quantity
+                });
+                shipmentCost = ((shipmentCost * 100) + (lineitem.xp.TotalCost * 100)) / 100;
+            });
+            var count = index + 1;
+            var shipmentObj = {
+                'BuyerID': buyerid,
+                'ID': orderid + '-' + (count < 10 ? '0' : '') + count,
+                'DateDelivered': formatDate(deliverydate),
+                'Cost': shipmentCost,
+                'Items': items,
+                'xp': {
+                    'Status': 'New',
+                    'addressType': vm.activeOrders[n][0].xp.addressType,
+                    'RecipientName': vm.activeOrders[n][0].ShippingAddress.FirstName + ' ' + vm.activeOrders[n][0].ShippingAddress.LastName,
+                    'Tax': Tax,
+                    'DeliveryFees': DeliveryFees,
+                    'CSRID': CurrentUser.ID
+                }
             };
         });
-
-        return $resource(nodeapiurl + '/giftcards/:id', {}, methods);
     }
 
-    function getToken(){
-        var cookiePrefix = ocAppName.Watch().replace(/ /g, '_').toLowerCase();
-        var authTokenCookieName = cookiePrefix + '.token';
-        return $cookies.get(authTokenCookieName);
+    /* * * Start Internal Functions * * */ 
+
+    function splitShipments(shipments, iteratee){
+        // splits shipments up, grouped by the result of running
+        // each line item within a shipment through an iteratee function
+        var splitshipments = [];
+        _.each(shipments, function(shipment){
+            var grouped = _.groupBy(shipment, function(lineitem){
+                return iteratee(lineitem);
+            });
+            _.each(grouped, function(shipment){
+                splitshipments.push(shipment);
+            });
+        });
+        return $q.when(splitshipments);
+    }
+
+    function formatDate(datetime){
+        var date = new Date(datetime);
+        return (date.getMonth()+1 < 10 ? '0' +(date.getMonth() + 1) : date.getMonth() + 1) +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()) +'/'+ date.getFullYear();
     }
 
     return service;
 }
-bachGiftCards.$inject = ['nodeapiurl', '$resource', '$cookies', 'ocAppName', 'toastr', '$http'];
+
+bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK'];angular.module('orderCloud')
+    .factory('bachShipments', bachShipmentsService)
+;
+
+function bachShipmentsService($q, buyerid, OrderCloudSDK){
+    var service = {
+        Breakup: _breakup
+    };
+
+    function _breakup(lineitems, order){
+        return splitShipments(lineitems)
+            .then(splitByProductFromStore)
+            .then(splitByEvents)
+            .then(function(shipments){
+                return createShipments(shipments, order);
+            });
+    }
+
+    function splitShipments(lineitems){
+       var grouped = _.groupBy(lineitems, function(lineitem){
+
+            // every line item with a unique recipient must be a unique shipment
+            var recipient = (lineitem.ShippingAddress.FirstName + lineitem.ShippingAddress.LastName).replace(/ /g, '').toLowerCase();
+
+            // every line item with a unique ship to address must be a unique shipment
+            var shipto = _.values(_.pick(lineitem.ShippingAddress, 'Street1', 'Street2', 'City', 'State', 'Zip', 'Country')).join('').replace(/ /g, '').toLowerCase();
+
+            // every line item with a unique requested delivery date must be a unique shipment
+            var deliverydate = lineitem.xp.DeliveryDate;
+
+            // every line item with a unique delivery method must be a unique shipment
+            var deliverymethod = lineitem.xp.DeliveryMethod;
+            
+
+            return recipient + shipto + deliverydate + deliverymethod;
+        });
+        return $q.when(_.values(grouped));
+    }
+
+    function splitByProductFromStore(shipments){
+        // if shipment has xp.DeliveryMethod = InStorePickup then split shipment by xp.ProductFromStore
+        var splitShipments = [];
+        _.each(shipments, function(shipment){
+            var grouped = _.groupBy(shipment, function(lineitem){
+                var hasInstorePickup = _.filter(shipment, function(li){
+                    return _.some(li.xp, {DeliveryMethod: 'InStorePickup'});
+                });
+                if(hasInstorePickup){
+                    return lineitem.xp.ProductFromStore;
+                } else {
+                    return;
+                }
+            });
+            _.each(grouped, function(shipment){
+                splitShipments.push(shipment);
+            });
+        });
+        return $q.when(splitShipments);
+    }
+
+    function splitByEvents(shipments){
+        // events are always a unique shipment
+        if(true) return $q.when(shipments); //TODO: remove this once Product.xp value for identifying a product event is defined
+        var splitShipments = [];
+        _.each(shipments, function(shipment, sindex){
+            _.each(shipment, function(lineitem, lindex){
+                if(lineitem.Product.xp.isEvent && shipment.length > 1){ //TODO: replace with correct value
+                    var event = shipment[sindex].splice(lindex, 1);
+                    splitShipments.push(event);
+                }
+            });
+        });
+        return $q.when(splitShipments);
+    }
+
+    function createShipments(shipments, order){
+        var shipmentsQueue = [];
+        _.each(shipments, function(shipment, index){
+
+            var items = [];
+            var cost = 0;
+            var tax = 0;
+
+            _.each(shipment, function(lineitem){
+                items.push({
+                    'OrderID': order.ID,
+                    'LineItemID': lineitem.ID,
+                    'QuantityShipped': lineitem.Quantity
+                });
+                cost = ((cost * 100) + (lineitem.LineTotal * 100)) / 100;
+                tax = ((tax * 100) + (lineitem.xp.Tax * 100)) / 100;
+            });
+            
+            var count = index + 1;
+            var li = shipment[0];
+
+            var shipmentObj = {
+                'BuyerID': buyerid,
+                'ID': order.ID + '-' + (count < 10 ? '0' : '') + count,
+                'DateDelivered': null, // is set by integration once order is actually delivered
+                'Cost': cost,
+                'Items': items,
+                'xp': {
+                    'Status': status(li),
+                    'PrintStatus': printStatus(li),
+                    'Direction': 'Outgoing', //will always be outgoing if set from app
+                    'DeliveryMethod': li.xp.DeliveryMethod, //possible values: LocalDelivery, FTD, TFE, InStorePickUp, Courier, USPS, Event
+                    'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
+                    'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
+                    'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
+                    'Tax': tax,
+                    'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
+                    'TimePreference': li.xp.deliveryRun || 'None', // when customer prefers to receive order,
+                    'ShipTo': li.ShippingAddress
+                }
+            };
+            shipmentsQueue.push(OrderCloudSDK.Shipments.Create(shipmentObj));
+        });
+
+
+        return $q.all(shipmentsQueue)
+            .then(function(data){
+                console.log(data);
+            });
+    }
+
+    /* * * Start Internal Functions * * */ 
+
+    function status(li){
+        if(li.xp.DeliveryMethod === 'FTD' || li.xp.DeliveryMethod === 'TFE'){
+            return 'OnHold';
+        } else if(li.xp.Status && li.xp.Status.length) {
+            return li.xp.Status;
+        } else {
+            return 'New';
+        }
+    }
+
+    function formatDate(datetime){
+        var date = new Date(datetime);
+        return (date.getMonth()+1 < 10 ? '0' +(date.getMonth() + 1) : date.getMonth() + 1) +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()) +'/'+ date.getFullYear();
+    }
+
+    function printStatus(li){
+        if( (li.xp.DeliveryMethod === 'LocalDelivery' || li.xp.DeliveryMethod === 'InStorePickup') && li.xp.ProductFromStore === 'OtherStore') {
+            return 'NotPrinted';
+        } else {
+            return 'NotNeeded';
+        }
+    }
+
+    return service;
+}

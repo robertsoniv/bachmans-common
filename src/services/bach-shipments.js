@@ -1,0 +1,153 @@
+angular.module('orderCloud')
+    .factory('bachShipments', bachShipmentsService)
+;
+
+function bachShipmentsService($q, buyerid, OrderCloudSDK){
+    var service = {
+        Breakup: _breakup
+    };
+
+    function _breakup(lineitems, order){
+        return splitShipments(lineitems)
+            .then(splitByProductFromStore)
+            .then(splitByEvents)
+            .then(function(shipments){
+                return createShipments(shipments, order);
+            });
+    }
+
+    function splitShipments(lineitems){
+       var grouped = _.groupBy(lineitems, function(lineitem){
+
+            // every line item with a unique recipient must be a unique shipment
+            var recipient = (lineitem.ShippingAddress.FirstName + lineitem.ShippingAddress.LastName).replace(/ /g, '').toLowerCase();
+
+            // every line item with a unique ship to address must be a unique shipment
+            var shipto = _.values(_.pick(lineitem.ShippingAddress, 'Street1', 'Street2', 'City', 'State', 'Zip', 'Country')).join('').replace(/ /g, '').toLowerCase();
+
+            // every line item with a unique requested delivery date must be a unique shipment
+            var deliverydate = lineitem.xp.DeliveryDate;
+
+            // every line item with a unique delivery method must be a unique shipment
+            var deliverymethod = lineitem.xp.DeliveryMethod;
+            
+
+            return recipient + shipto + deliverydate + deliverymethod;
+        });
+        return $q.when(_.values(grouped));
+    }
+
+    function splitByProductFromStore(shipments){
+        // if shipment has xp.DeliveryMethod = InStorePickup then split shipment by xp.ProductFromStore
+        var splitShipments = [];
+        _.each(shipments, function(shipment){
+            var grouped = _.groupBy(shipment, function(lineitem){
+                var hasInstorePickup = _.filter(shipment, function(li){
+                    return _.some(li.xp, {DeliveryMethod: 'InStorePickup'});
+                });
+                if(hasInstorePickup){
+                    return lineitem.xp.ProductFromStore;
+                } else {
+                    return;
+                }
+            });
+            _.each(grouped, function(shipment){
+                splitShipments.push(shipment);
+            });
+        });
+        return $q.when(splitShipments);
+    }
+
+    function splitByEvents(shipments){
+        // events are always a unique shipment
+        if(true) return $q.when(shipments); //TODO: remove this once Product.xp value for identifying a product event is defined
+        var splitShipments = [];
+        _.each(shipments, function(shipment, sindex){
+            _.each(shipment, function(lineitem, lindex){
+                if(lineitem.Product.xp.isEvent && shipment.length > 1){ //TODO: replace with correct value
+                    var event = shipment[sindex].splice(lindex, 1);
+                    splitShipments.push(event);
+                }
+            });
+        });
+        return $q.when(splitShipments);
+    }
+
+    function createShipments(shipments, order){
+        var shipmentsQueue = [];
+        _.each(shipments, function(shipment, index){
+
+            var items = [];
+            var cost = 0;
+            var tax = 0;
+
+            _.each(shipment, function(lineitem){
+                items.push({
+                    'OrderID': order.ID,
+                    'LineItemID': lineitem.ID,
+                    'QuantityShipped': lineitem.Quantity
+                });
+                cost = ((cost * 100) + (lineitem.LineTotal * 100)) / 100;
+                tax = ((tax * 100) + (lineitem.xp.Tax * 100)) / 100;
+            });
+            
+            var count = index + 1;
+            var li = shipment[0];
+
+            var shipmentObj = {
+                'BuyerID': buyerid,
+                'ID': order.ID + '-' + (count < 10 ? '0' : '') + count,
+                'DateDelivered': null, // is set by integration once order is actually delivered
+                'Cost': cost,
+                'Items': items,
+                'xp': {
+                    'Status': status(li),
+                    'PrintStatus': printStatus(li),
+                    'Direction': 'Outgoing', //will always be outgoing if set from app
+                    'DeliveryMethod': li.xp.DeliveryMethod, //possible values: LocalDelivery, FTD, TFE, InStorePickUp, Courier, USPS, Event
+                    'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
+                    'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
+                    'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
+                    'Tax': tax,
+                    'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
+                    'TimePreference': li.xp.deliveryRun || 'None', // when customer prefers to receive order,
+                    'ShipTo': li.ShippingAddress
+                }
+            };
+            shipmentsQueue.push(OrderCloudSDK.Shipments.Create(shipmentObj));
+        });
+
+
+        return $q.all(shipmentsQueue)
+            .then(function(data){
+                console.log(data);
+            });
+    }
+
+    /* * * Start Internal Functions * * */ 
+
+    function status(li){
+        if(li.xp.DeliveryMethod === 'FTD' || li.xp.DeliveryMethod === 'TFE'){
+            return 'OnHold';
+        } else if(li.xp.Status && li.xp.Status.length) {
+            return li.xp.Status;
+        } else {
+            return 'New';
+        }
+    }
+
+    function formatDate(datetime){
+        var date = new Date(datetime);
+        return (date.getMonth()+1 < 10 ? '0' +(date.getMonth() + 1) : date.getMonth() + 1) +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()) +'/'+ date.getFullYear();
+    }
+
+    function printStatus(li){
+        if( (li.xp.DeliveryMethod === 'LocalDelivery' || li.xp.DeliveryMethod === 'InStorePickup') && li.xp.ProductFromStore === 'OtherStore') {
+            return 'NotPrinted';
+        } else {
+            return 'NotNeeded';
+        }
+    }
+
+    return service;
+}
