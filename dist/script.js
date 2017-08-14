@@ -238,6 +238,21 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                 }
             });
         });
+        return shipmentTotals(shipments);
+    }
+
+    function shipmentTotals(shipments){
+        _.each(shipments, function(shipment){
+            shipment.Cost = 0;
+            shipment.Tax = 0;
+            _.each(shipment, function(li){
+                if(li && li.xp.Tax) {
+                    shipment.Cost = ((shipment.Cost * 100) + li.LineTotal * 100) / 100;
+                    shipment.Tax = ((shipment.Tax * 100) + li.xp.Tax * 100) / 100;
+                }
+            });
+            shipment.Total = ((shipment.Cost * 100) + (shipment.Tax)) / 100;
+        });
         return shipments;
     }
 
@@ -275,7 +290,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
                     'Tax': shipment.Tax,
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
-                    'TimePreference': li.xp.deliveryRun || 'None', // when customer prefers to receive order,
+                    'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress
                 }
             };
