@@ -230,16 +230,15 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
 
     function splitByEvents(shipments){
         // events are always a unique shipment
-        var result = [];
         _.each(shipments, function(shipment, sindex){
             _.each(shipment, function(lineitem, lindex){
                 if(lineitem.Product.xp.isEvent && shipment.length > 1){
                     var event = shipment[sindex].splice(lindex, 1);
-                    result.push(event);
+                    shipments.push(event);
                 }
             });
         });
-        return result;
+        return shipments;
     }
 
     function _create(lineitems, order){
