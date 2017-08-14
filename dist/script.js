@@ -110,152 +110,101 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
     return service;
 }
 
-bachShipmentsService.$inject = ['$q', 'buyerid'];angular.module('orderCloud')
-    .factory('bachShipments', bachShipmentsService)
+bachGiftCards.$inject = ['nodeapiurl', '$resource', '$cookies', 'ocAppName', 'toastr', '$http'];angular.module('bachmans-common')
+    .factory('bachGiftCards', bachGiftCards)
 ;
 
-function bachShipmentsService($q, buyerid){
+function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http){
     var service = {
-        Breakup: _breakup
+        Create: _create,
+        Update: _update,
+        Delete: _delete,
+        List: _list,
+        Purchase: _purchase
     };
 
-    function _breakup(lineitems, orderid, deliverydate){
-        return splitByUniqueRecipient([lineitems])
-            .then(splitByShipTo)
-            .then(splitByDeliveryDate)
-            .then(splitByShippingMethod)
-            .then(function(shipments){
-                createShipments(shipments, orderid, deliverydate);
+    function _create(req){
+        return GiftCards().create(req).$promise;
+    }
+
+    function _update(req){
+        if(!req.body && !req.body.id) return toastr.error('id is a required parameter');
+        return GiftCards().update({id: req.body.id}, req.body).$promise;
+    }
+
+    function _delete(req){
+        return GiftCards().delete({id: req.id}).$promise;
+    }
+
+    function _list(req){
+        return GiftCards().list(req && req.searchTerm ? {searchTerm: req.searchTerm} : null).$promise
+            .then(function(results){
+                return results.list;
             });
     }
 
-
-    function splitByUniqueRecipient(lineitems){
-        // every line item with a unique recipient must be a unique shipment
-        var iteratee = function(lineitem){
-            return (lineitem.ShippingAddress.FirstName + lineitem.ShippingAddress.LastName).replace(/ /g, '').toLowerCase();
-        };
-        return splitShipments(lineitems, iteratee);
+    function _purchase(req){
+        return $http.post(nodeapiurl + '/giftcards/purchase/' + req.orderid, {}, {headers: {'oc-token': getToken()}});
     }
-
-    function splitByShipTo(shipments){
-        // every line item with a unique ship to address must be a unique shipment
-        var iteratee = function(lineitem){
-            var stringifiedShipTo = _.values(_.pick(lineitem.ShippingAddress, 'Street1', 'Street2', 'City', 'State', 'Zip', 'Country')).join('').replace(/ /g, '').toLowerCase();
-            return stringifiedShipTo;
+    
+    function GiftCards(){
+        var methods = {
+            create: {method: 'POST'},
+            update: {method: 'PUT'},
+            delete: {method: 'DELETE'},
+            list: {method: 'GET'}
         };
-        return splitShipments(shipments, iteratee);
-    }
-
-    function splitByDeliveryDate(shipments){
-        // every line item with a unique requested delivery date must be a unique shipment
-        var iteratee = function(lineitem){
-            return lineitem.xp.DeliveryDate;
-        };
-        return splitShipments(shipments, iteratee);
-    }
-
-    function splitByShippingMethod(shipments){
-        // every line item with a unique shipping method must be a unique shipment
-        var iteratee = function(lineitem){
-            return lineitem.xp.DeliveryMethod;
-        };
-        return splitShipments(shipments, iteratee);
-    }
-
-    function createShipments(shipments, orderid, deliverydate){
-        _.each(shipments, function(shipment, index){
-            var items = [];
-            var shipmentCost = 0;
-            _.each(shipment, function(lineitem){
-                items.push({
-                    'OrderID': lineitem.OrderID,
-                    'LineItemID': lineitem.ID,
-                    'QuantityShipped': lineitem.Quantity
-                });
-                shipmentCost = ((shipmentCost * 100) + (lineitem.xp.TotalCost * 100)) / 100;
-            });
-            var count = index + 1;
-            var shipmentObj = {
-                'BuyerID': buyerid,
-                'ID': orderid + '-' + (count < 10 ? '0' : '') + count,
-                'DateDelivered': formatDate(deliverydate),
-                'Cost': shipmentCost,
-                'Items': items,
-                'xp': {
-                    'Status': 'New',
-                    'addressType': vm.activeOrders[n][0].xp.addressType,
-                    'RecipientName': vm.activeOrders[n][0].ShippingAddress.FirstName + ' ' + vm.activeOrders[n][0].ShippingAddress.LastName,
-                    'Tax': Tax,
-                    'DeliveryFees': DeliveryFees,
-                    'CSRID': CurrentUser.ID
-                }
+        _.each(methods, function(method){
+            method.headers = {
+                'oc-token': getToken()
             };
         });
+
+        return $resource(nodeapiurl + '/giftcards/:id', {}, methods);
     }
 
-    /* * * Start Internal Functions * * */ 
-
-    function splitShipments(shipments, iteratee){
-        // splits shipments up, grouped by the result of running
-        // each line item within a shipment through an iteratee function
-        var splitshipments = [];
-        _.each(shipments, function(shipment){
-            var grouped = _.groupBy(shipment, function(lineitem){
-                return iteratee(lineitem);
-            });
-            _.each(grouped, function(shipment){
-                splitshipments.push(shipment);
-            });
-        });
-        return $q.when(splitshipments);
-    }
-
-    function formatDate(datetime){
-        var date = new Date(datetime);
-        return (date.getMonth()+1 < 10 ? '0' +(date.getMonth() + 1) : date.getMonth() + 1) +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()) +'/'+ date.getFullYear();
+    function getToken(){
+        var cookiePrefix = ocAppName.Watch().replace(/ /g, '_').toLowerCase();
+        var authTokenCookieName = cookiePrefix + '.token';
+        return $cookies.get(authTokenCookieName);
     }
 
     return service;
 }
 
-bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK'];angular.module('orderCloud')
+bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK'];angular.module('bachmans-common')
     .factory('bachShipments', bachShipmentsService)
 ;
 
 function bachShipmentsService($q, buyerid, OrderCloudSDK){
     var service = {
-        Breakup: _breakup
+        Group: _group,
+        Create: _create
     };
 
-    function _breakup(lineitems, order){
-        return splitShipments(lineitems)
-            .then(splitByProductFromStore)
-            .then(splitByEvents)
-            .then(function(shipments){
-                return createShipments(shipments, order);
-            });
-    }
+    function _group(lineitems){
+       var initialGrouping = _.groupBy(lineitems, function(lineitem){
 
-    function splitShipments(lineitems){
-       var grouped = _.groupBy(lineitems, function(lineitem){
+            var recipient = '';
+            var shipto = '';
+            if(lineitem.ShippingAddress){
+                // every line item with a unique recipient must be a unique shipment
+                recipient = (lineitem.ShippingAddress.FirstName + lineitem.ShippingAddress.LastName).replace(/ /g, '').toLowerCase();
 
-            // every line item with a unique recipient must be a unique shipment
-            var recipient = (lineitem.ShippingAddress.FirstName + lineitem.ShippingAddress.LastName).replace(/ /g, '').toLowerCase();
-
-            // every line item with a unique ship to address must be a unique shipment
-            var shipto = _.values(_.pick(lineitem.ShippingAddress, 'Street1', 'Street2', 'City', 'State', 'Zip', 'Country')).join('').replace(/ /g, '').toLowerCase();
-
+                // every line item with a unique ship to address must be a unique shipment
+                shipto = _.values(_.pick(lineitem.ShippingAddress, 'Street1', 'Street2', 'City', 'State', 'Zip', 'Country')).join('').replace(/ /g, '').toLowerCase();
+            }
+            
             // every line item with a unique requested delivery date must be a unique shipment
-            var deliverydate = lineitem.xp.DeliveryDate;
+            var deliverydate = lineitem.xp.DeliveryDate || '';
 
             // every line item with a unique delivery method must be a unique shipment
-            var deliverymethod = lineitem.xp.DeliveryMethod;
+            var deliverymethod = lineitem.xp.DeliveryMethod || '';
             
 
             return recipient + shipto + deliverydate + deliverymethod;
         });
-        return $q.when(_.values(grouped));
+        return splitByProductFromStore(_.values(initialGrouping));
     }
 
     function splitByProductFromStore(shipments){
@@ -276,40 +225,36 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                 splitShipments.push(shipment);
             });
         });
-        return $q.when(splitShipments);
+        return splitByEvents(splitShipments);
     }
 
     function splitByEvents(shipments){
         // events are always a unique shipment
-        if(true) return $q.when(shipments); //TODO: remove this once Product.xp value for identifying a product event is defined
-        var splitShipments = [];
+        var result = [];
         _.each(shipments, function(shipment, sindex){
             _.each(shipment, function(lineitem, lindex){
-                if(lineitem.Product.xp.isEvent && shipment.length > 1){ //TODO: replace with correct value
+                if(lineitem.Product.xp.isEvent && shipment.length > 1){
                     var event = shipment[sindex].splice(lindex, 1);
-                    splitShipments.push(event);
+                    result.push(event);
                 }
             });
         });
-        return $q.when(splitShipments);
+        return result;
     }
 
-    function createShipments(shipments, order){
+    function _create(lineitems, order){
+        var shipments = _group(lineitems);
+
         var shipmentsQueue = [];
         _.each(shipments, function(shipment, index){
 
             var items = [];
-            var cost = 0;
-            var tax = 0;
-
             _.each(shipment, function(lineitem){
                 items.push({
                     'OrderID': order.ID,
                     'LineItemID': lineitem.ID,
                     'QuantityShipped': lineitem.Quantity
                 });
-                cost = ((cost * 100) + (lineitem.LineTotal * 100)) / 100;
-                tax = ((tax * 100) + (lineitem.xp.Tax * 100)) / 100;
             });
             
             var count = index + 1;
@@ -319,7 +264,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                 'BuyerID': buyerid,
                 'ID': order.ID + '-' + (count < 10 ? '0' : '') + count,
                 'DateDelivered': null, // is set by integration once order is actually delivered
-                'Cost': cost,
+                'Cost': shipment.Cost,
                 'Items': items,
                 'xp': {
                     'Status': status(li),
@@ -329,7 +274,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
-                    'Tax': tax,
+                    'Tax': shipment.Tax,
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
                     'TimePreference': li.xp.deliveryRun || 'None', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress
@@ -338,11 +283,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             shipmentsQueue.push(OrderCloudSDK.Shipments.Create(shipmentObj));
         });
 
-
-        return $q.all(shipmentsQueue)
-            .then(function(data){
-                console.log(data);
-            });
+        return $q.all(shipmentsQueue);
     }
 
     /* * * Start Internal Functions * * */ 
