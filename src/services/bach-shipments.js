@@ -30,8 +30,8 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             
             // every line item with a unique status must be a unique shipment
             // normalize statuses - previously FTDIncoming/Outgoing and TFEIncoming/Outgoing
-            if(lineitem.xp.Status.indexOf('FTD')) lineitem.xp.Status = 'FTD';
-            if(lineitem.xp.Status.indexOf('TFE')) lineitem.xp.Status = 'TFE';
+            if(lineitem.xp.Status.indexOf('FTD') > -1) lineitem.xp.Status = 'FTD';
+            if(lineitem.xp.Status.indexOf('TFE') > -1) lineitem.xp.Status = 'TFE';
             var status = lineitem.xp.Status;
 
             return recipient + shipto + deliverydate + deliverymethod + status;
