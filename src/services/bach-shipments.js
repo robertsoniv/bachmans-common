@@ -134,8 +134,8 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
     function status(li){
         if(li.xp.DeliveryMethod === 'FTD' || li.xp.DeliveryMethod === 'TFE'){
             return 'OnHold';
-        } else if(li.xp.Status && li.xp.Status.length) {
-            return li.xp.Status;
+        } else if(li.xp.Status && li.xp.Status === 'OnHold') {
+            return 'OnHold';
         } else {
             return 'New';
         }
