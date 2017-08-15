@@ -9,6 +9,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
     };
 
     function _group(lineitems){
+
        var initialGrouping = _.groupBy(lineitems, function(lineitem){
 
             var recipient = '';
@@ -27,8 +28,10 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             // every line item with a unique delivery method must be a unique shipment
             var deliverymethod = lineitem.xp.DeliveryMethod || '';
             
+            // every line item with a unique status must be a unique shipment
+            var status = lineitem.xp.Status;
 
-            return recipient + shipto + deliverydate + deliverymethod;
+            return recipient + shipto + deliverydate + deliverymethod + status;
         });
         return splitByProductFromStore(_.values(initialGrouping));
     }
