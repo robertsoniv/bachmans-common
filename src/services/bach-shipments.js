@@ -30,8 +30,8 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             
             // every line item with a unique status must be a unique shipment
             // normalize statuses - previously FTDIncoming/Outgoing and TFEIncoming/Outgoing
-            if(lineitem.xp.Status.indexOf('FTD') > -1) lineitem.xp.Status = 'FTD';
-            if(lineitem.xp.Status.indexOf('TFE') > -1) lineitem.xp.Status = 'TFE';
+            if(lineitem.xp.Status && lineitem.xp.Status.indexOf('FTD') > -1) lineitem.xp.Status = 'FTD';
+            if(lineitem.xp.Status && lineitem.xp.Status.indexOf('TFE') > -1) lineitem.xp.Status = 'TFE';
             var status = lineitem.xp.Status;
 
             return recipient + shipto + deliverydate + deliverymethod + status;
@@ -78,7 +78,8 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             shipment.Cost = 0;
             shipment.Tax = 0;
             _.each(shipment, function(li){
-                if(li && li.xp.Tax) {
+                if(li && li.xp) {
+                    li.xp.Tax = li.xp.Tax || 0;
                     shipment.Cost = ((shipment.Cost * 100) + li.LineTotal * 100) / 100;
                     shipment.Tax = ((shipment.Tax * 100) + li.xp.Tax * 100) / 100;
                 }
@@ -88,7 +89,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
         return shipments;
     }
 
-    function _create(lineitems, order){
+    function _create(lineitems, order, fromSF){
         var shipments = _group(lineitems);
 
         var shipmentsQueue = [];
@@ -126,7 +127,31 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                     'ShipTo': li.ShippingAddress
                 }
             };
-            shipmentsQueue.push(OrderCloudSDK.Shipments.Create(shipmentObj));
+            if(fromSF){
+                //SF cant't have a shipments decorator (doesnt work with impersonated calls) 
+                // so we need to explicitly call save item with impersonated AsAdmin method
+
+                //TODO: consider moving this to an integration so we dont need this hacky workaround
+                // and can remove ShipmentAdmin role on SF
+                shipmentsQueue.push(function(){
+                    return OrderCloudSDK.AsAdmin().Shipments.Create(shipmentObj)
+                        .then(function(shipmentResponse){
+                            var queue = [];
+                            _.each(shipmentObj.Items, function(item){
+                                shipmentResponse.Items = [];
+                                shipmentResponse.Items.push(item);
+                                queue.push(OrderCloudSDK.AsAdmin().Shipments.SaveItem(shipmentResponse.ID, item));
+                            });
+                            return $q.all(queue)
+                                .then(function(){
+                                    return shipmentResponse;
+                                });
+                        });
+                }());
+            } else {
+                shipmentsQueue.push(OrderCloudSDK.Shipments.Create(shipmentObj));
+            }
+            
         });
 
         return $q.all(shipmentsQueue);
@@ -135,9 +160,12 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
     /* * * Start Internal Functions * * */ 
 
     function status(li){
-        if(li.xp.DeliveryMethod.indexOf('FTD') > -1 || li.xp.DeliveryMethod.indexOf('TFE') > -1){
+        if(li.xp.DeliveryMethod && (li.xp.DeliveryMethod.indexOf('FTD') > -1 || li.xp.DeliveryMethod.indexOf('TFE') > -1)){
             return 'OnHold';
         } else if(li.xp.Status && li.xp.Status === 'OnHold') {
+            return 'OnHold';
+        } else if(li.xp.addressType && ['Funeral', 'Church', 'Cemetary'].indexOf(li.xp.addressType) > -1){
+            //these orders are typically difficult to fulfill so CSRs need to see them on hold screen right away
             return 'OnHold';
         } else {
             return 'New';
