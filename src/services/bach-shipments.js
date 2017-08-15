@@ -29,6 +29,9 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             var deliverymethod = lineitem.xp.DeliveryMethod || '';
             
             // every line item with a unique status must be a unique shipment
+            // normalize statuses - previously FTDIncoming/Outgoing and TFEIncoming/Outgoing
+            if(lineitem.xp.Status.indexOf('FTD')) lineitem.xp.Status = 'FTD';
+            if(lineitem.xp.Status.indexOf('TFE')) lineitem.xp.Status = 'TFE';
             var status = lineitem.xp.Status;
 
             return recipient + shipto + deliverydate + deliverymethod + status;
@@ -132,7 +135,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
     /* * * Start Internal Functions * * */ 
 
     function status(li){
-        if(li.xp.DeliveryMethod === 'FTD' || li.xp.DeliveryMethod === 'TFE'){
+        if(li.xp.DeliveryMethod.indexOf('FTD') > -1 || li.xp.DeliveryMethod.indexOf('TFE') > -1){
             return 'OnHold';
         } else if(li.xp.Status && li.xp.Status === 'OnHold') {
             return 'OnHold';
