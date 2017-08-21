@@ -5,7 +5,8 @@ angular.module('bachmans-common')
 function bachShipmentsService($q, buyerid, OrderCloudSDK){
     var service = {
         Group: _group,
-        Create: _create
+        Create: _create,
+        List: _list
     };
 
     function _group(lineitems){
@@ -32,7 +33,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             // normalize statuses - previously FTDIncoming/Outgoing and TFEIncoming/Outgoing
             if(lineitem.xp.Status && lineitem.xp.Status.indexOf('FTD') > -1) lineitem.xp.Status = 'FTD';
             if(lineitem.xp.Status && lineitem.xp.Status.indexOf('TFE') > -1) lineitem.xp.Status = 'TFE';
-            var status = lineitem.xp.Status;
+            var status = lineitem.xp.Status || 'Open';
 
             return recipient + shipto + deliverydate + deliverymethod + status;
         });
@@ -43,10 +44,10 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
         // if shipment has xp.DeliveryMethod = InStorePickup then split shipment by xp.ProductFromStore
         var splitShipments = [];
         _.each(shipments, function(shipment){
+            var hasInstorePickup = _.filter(shipment, function(li){
+                return _.some(li.xp, {DeliveryMethod: 'InStorePickup'});
+            });
             var grouped = _.groupBy(shipment, function(lineitem){
-                var hasInstorePickup = _.filter(shipment, function(li){
-                    return _.some(li.xp, {DeliveryMethod: 'InStorePickup'});
-                });
                 if(hasInstorePickup){
                     return lineitem.xp.ProductFromStore;
                 } else {
@@ -111,17 +112,17 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                 'BuyerID': buyerid,
                 'ID': order.ID + '-' + (count < 10 ? '0' : '') + count,
                 'DateDelivered': null, // is set by integration once order is actually delivered
-                'Cost': shipment.Cost,
+                'Cost': shipment.Cost, //cumulative li.LineTotal for all li in this shipment
                 'Items': items,
                 'xp': {
                     'Status': status(li),
                     'PrintStatus': printStatus(li),
                     'Direction': 'Outgoing', //will always be outgoing if set from app
-                    'DeliveryMethod': li.xp.DeliveryMethod, //possible values: LocalDelivery, FTD, TFE, InStorePickUp, Courier, USPS, Event
+                    'DeliveryMethod': li.xp.DeliveryMethod, //possible values: LocalDelivery, FTD, TFE, InStorePickUp, Courier, USPS, UPS, Event
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
-                    'Tax': shipment.Tax,
+                    'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress
@@ -178,11 +179,47 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
     }
 
     function printStatus(li){
-        if( (li.xp.DeliveryMethod === 'LocalDelivery' || li.xp.DeliveryMethod === 'InStorePickup') && li.xp.ProductFromStore === 'OtherStore') {
+        if( (li.xp.DeliveryMethod === 'LocalDelivery') || ( li.xp.DeliveryMethod === 'InStorePickup' && li.xp.ProductFromStore === 'OtherStore')) {
             return 'NotPrinted';
         } else {
             return 'NotNeeded';
         }
+    }
+
+    function _list(orderID){
+        var shipmentItemDictionary = {};
+        var filter = {
+            pageSize: 100,
+            orderID: orderID
+        };
+        return OrderCloudSDK.Shipments.List(filter)
+            .then(function(shipmentList){
+                var queue = [];
+                _.each(shipmentList.Items, function(shipment){
+                    queue.push(function(){
+                        return OrderCloudSDK.Shipments.ListItems(shipment.ID)
+                            .then(function(shipmentItems){
+                                shipment.Items = shipmentItems.Items;
+                                _.each(shipmentItems.Items, function(item){
+                                    shipmentItemDictionary[item.LineItemID] = item;
+                                });
+                                return shipment;
+                            });
+                    }());
+                });
+                return $q.all(queue)
+                    .then(function(shipments){
+                        _.each(shipments, function(shipment, shipmentKey){
+                            _.each(shipment.Items, function(shipmentItems, itemKey){
+                                _.each(shipmentItems.xp.AddExtraLineItemsList, function(addextraID, addExtraKey){
+                                    //replace id with actual line item object (easier to access in html)
+                                    shipments[shipmentKey].Items[itemKey].xp.AddExtraLineItemsList[addExtraKey] = shipmentItemDictionary[addextraID];
+                                });
+                            });
+                        });
+                        return shipments;
+                    });
+            });
     }
 
     return service;
