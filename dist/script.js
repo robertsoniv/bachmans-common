@@ -53,6 +53,28 @@ function OrderCloudSDKBuyerXP($provide){
     }]);
 }
 
+bachAssignments.$inject = ['nodeapiurl', '$resource', 'OrderCloudSDK'];angular.module('bachmans-common')
+    .factory('bachAssignments', bachAssignments);
+
+function bachAssignments(nodeapiurl, $resource, OrderCloudSDK) {
+    var service = {
+        UserGroup: _userGroup
+    };
+
+    function _userGroup(assignment) {
+        return $resource(nodeapiurl + '/assignments/usergroup', {}, {
+            call: {
+                method: 'POST', 
+                headers: {
+                    'oc-token': OrderCloudSDK.GetToken()
+                }
+            }
+        }).call(assignment).$promise;
+    }
+
+    return service;
+}
+
 bachBuyerXpService.$inject = ['$q', '$http', '$interval', 'nodeapiurl'];
 angular.module('bachmans-common')
     .factory('bachBuyerXp', bachBuyerXpService)
@@ -110,11 +132,11 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
     return service;
 }
 
-bachGiftCards.$inject = ['nodeapiurl', '$resource', '$cookies', 'ocAppName', 'toastr', '$http'];angular.module('bachmans-common')
+bachGiftCards.$inject = ['nodeapiurl', '$resource', 'toastr', '$http', 'OrderCloudSDK'];angular.module('bachmans-common')
     .factory('bachGiftCards', bachGiftCards)
 ;
 
-function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http){
+function bachGiftCards(nodeapiurl, $resource, toastr, $http, OrderCloudSDK){
     var service = {
         Create: _create,
         Update: _update,
@@ -144,7 +166,7 @@ function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http
     }
 
     function _purchase(req){
-        return $http.post(nodeapiurl + '/giftcards/purchase/' + req.orderid, {}, {headers: {'oc-token': getToken()}});
+        return $http.post(nodeapiurl + '/giftcards/purchase/' + req.orderid, {}, {headers: {'oc-token': OrderCloudSDK.GetToken()}});
     }
     
     function GiftCards(){
@@ -156,17 +178,11 @@ function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http
         };
         _.each(methods, function(method){
             method.headers = {
-                'oc-token': getToken()
+                'oc-token': OrderCloudSDK.GetToken()
             };
         });
 
         return $resource(nodeapiurl + '/giftcards/:id', {}, methods);
-    }
-
-    function getToken(){
-        var cookiePrefix = ocAppName.Watch().replace(/ /g, '_').toLowerCase();
-        var authTokenCookieName = cookiePrefix + '.token';
-        return $cookies.get(authTokenCookieName);
     }
 
     return service;

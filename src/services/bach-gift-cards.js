@@ -2,7 +2,7 @@ angular.module('bachmans-common')
     .factory('bachGiftCards', bachGiftCards)
 ;
 
-function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http){
+function bachGiftCards(nodeapiurl, $resource, toastr, $http, OrderCloudSDK){
     var service = {
         Create: _create,
         Update: _update,
@@ -32,7 +32,7 @@ function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http
     }
 
     function _purchase(req){
-        return $http.post(nodeapiurl + '/giftcards/purchase/' + req.orderid, {}, {headers: {'oc-token': getToken()}});
+        return $http.post(nodeapiurl + '/giftcards/purchase/' + req.orderid, {}, {headers: {'oc-token': OrderCloudSDK.GetToken()}});
     }
     
     function GiftCards(){
@@ -44,17 +44,11 @@ function bachGiftCards(nodeapiurl, $resource, $cookies, ocAppName, toastr, $http
         };
         _.each(methods, function(method){
             method.headers = {
-                'oc-token': getToken()
+                'oc-token': OrderCloudSDK.GetToken()
             };
         });
 
         return $resource(nodeapiurl + '/giftcards/:id', {}, methods);
-    }
-
-    function getToken(){
-        var cookiePrefix = ocAppName.Watch().replace(/ /g, '_').toLowerCase();
-        var authTokenCookieName = cookiePrefix + '.token';
-        return $cookies.get(authTokenCookieName);
     }
 
     return service;
