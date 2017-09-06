@@ -15,6 +15,8 @@ gulp.task('build', function() {
         }))
         .pipe(concat('script.js'))
         .pipe(gulp.dest('./dist/'))
+        .pipe(rename('script.min.js'))
+        .pipe(gulp.dest('../Bachmans-Store/bower_components/bachmans-common/dist'))
         .pipe(uglify())
         .pipe(rename('script.min.js'))
         .pipe(gulp.dest('./dist/'));
