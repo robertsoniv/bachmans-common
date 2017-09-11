@@ -197,8 +197,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
     var service = {
         Group: _group,
         Create: _create,
-        List: _list,
-        CalculateShippingCost: _calculateShippingCost
+        List: _list
     };
 
     function _group(lineitems, buyerxp){
@@ -284,29 +283,44 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
 
     function shipmentTotals(shipments){
         var ftd = _.findWhere(_buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
-        var tfe = _.findWhere(_buyerxp.wireOrder.OutgoingOrders, {Name: 'Teleflora.com'});
         _.each(shipments, function(shipment){
             shipment.Cost = 0;
             shipment.Tax = 0;
-            shipment.FTDServiceFees = 0;
-            shipment.FTDDeliveryFees = 0;
-            shipment.TFEServiceFees = 0;
-            shipment.TFEDeliveryFees = 0;
+            shipment.WiredServiceFees = 0;
+            shipment.WiredDeliveryFees = 0;
+            shipment.DeliveryCharges = 0;
+
+            var standardDeliveryCharges = 0; //charges for LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
+            var wiredOrderCost = 0; //charges for TFE/FTD
+            var nonDeliveryCharges = 0; //charges for Assembly, Placement etc.
+
             _.each(shipment, function(li){
                 if(li.xp) {
                     li.xp.Tax = li.xp.Tax || 0;
                     shipment.Cost = add(shipment.Cost, li.LineTotal);
                     shipment.Tax = add(shipment.Tax, li.xp.Tax);
                 }
+
+                _.each(li.xp.deliveryFeesDtls, function(charge, type){
+                    if(_.contains(['LocalDelivery', 'Standard Delivery', 'InStorePickUp', 'Courier', 'USPS', 'UPS', 'UPS Charges', 'Event'], type)){
+                        standardDeliveryCharges = add(standardDeliveryCharges, charge);
+                    } else {
+                        nonDeliveryCharges = add(nonDeliveryCharges, charge);
+                    }
+                });
             });
-            if(shipment[0].xp.Destination && shipment[0].xp.Destination === 'F'){
-                shipment.FTDServiceFees = add(ftd.WiredServiceFees, shipment.FTDServiceFees);
-                shipment.FTDDeliveryFees = add(ftd.WiredDeliveryFees, shipment.FTDDeliveryFees);
+            if(shipment[0].xp.Destination && _.contains(['F', 'T'], shipment[0].xp.Destination) ){
+                //TODO: per chris there will only be one fee for BOTH wired order types
+                //so we can clean up the data model a bit - maybe store on buyerxp.wireOrder.OutgoingOrders[ServiceFee and DeliveryFee]
+                shipment.WiredServiceFees = add(ftd.WiredServiceFees, shipment.WiredServiceFees);
+                shipment.WiredDeliveryFees = add(ftd.WiredDeliveryFees, shipment.WiredDeliveryFees);
             }
-            if(shipment[0].xp.Destination && shipment[0].xp.Destination === 'T') {
-                shipment.TFEServiceFees = add(tfe.WiredServiceFees, shipment.TFEServiceFees);
-                shipment.TFEDeliveryFees = add(tfe.WiredDeliveryFees, shipment.TFEDeliveryFees);
-            }
+
+            wiredOrderCost = shipment.WiredServiceFees + shipment.WiredDeliveryFees;
+
+            //only either wired delivery charges OR standard delivery charges should apply - never both
+            shipment.DeliveryCharges = nonDeliveryCharges + (wiredOrderCost || standardDeliveryCharges); 
+
             shipment.Total = add(shipment.Cost, shipment.Tax);
         });
         return shipments;
@@ -345,7 +359,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
                     'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
-                    'DeliveryCharges': '', //TODO: find out how to get this value
+                    'DeliveryCharges': shipment.DeliveryCharges,
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress
@@ -409,46 +423,6 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
             });
     }
 
-    function _calculateShippingCost(args, shipments){
-        var wiredOrderCost = 0;
-        var shippingCost = 0;
-        var taxCost = 0;
-
-        _.each(shipments, function(shipment){
-            if(shipment.FTDDeliveryFees && shipment.FTDDeliveryFees > 0){
-                wiredOrderCost = add(wiredOrderCost, shipment.FTDDeliveryFees); 
-            }
-
-            if(shipment.FTDServiceFees && shipment.FTDServiceFees > 0){
-                wiredOrderCost = add(wiredOrderCost, shipment.FTDServiceFees); 
-            }
-
-            if(shipment.TFEDeliveryFees && shipment.TFEDeliveryFees > 0){
-                wiredOrderCost = add(wiredOrderCost, shipment.TFEDeliveryFees); 
-            }
-
-            if(shipment.TFEServiceFees && shipment.TFEServiceFees > 0){
-                wiredOrderCost = add(wiredOrderCost, shipment.TFEServiceFees); 
-            }
-            
-        });
-
-        return OrderCloudSDK.LineItems.List('outgoing', args).then(function(lineitemlist){
-            _.each(lineitemlist.Items, function(li){
-                shippingCost = add(shippingCost, li.xp.deliveryCharges || 0);
-                taxCost = add(taxCost, li.xp.Tax);
-            });
-
-            return OrderCloudSDK.Orders.Patch('outgoing', args, {
-                ShippingCost: wiredOrderCost || shippingCost, //only one of these will apply
-                TaxCost: taxCost,
-                xp: {
-                    Tax: taxCost.toFixed(2)
-                }
-            });
-        });
-    }
-
     /* * * Start Internal Functions * * */ 
 
     function status(li){
@@ -500,47 +474,22 @@ bachWiredOrdersService.$inject = ['$q'];angular.module('bachmans-common')
 
 function bachWiredOrdersService($q) {
     var service = {
-        GetDeliveryFees: _getDeliveryFees,
+        DetermineEithers: _determineEithers,
         GetServiceFees: _getServiceFees,
-        GetDestinations: _getDestinations,
-        DetermineEithers: _determineEithers
+        GetDeliveryFees: _getDeliveryFees
     };
 
-    function _getDeliveryFees(shipments){
-        var charges = 0;
-        _.each(shipments, function(shipment){
-            if(shipment.FTDDeliveryFees && shipment.FTDDeliveryFees > 0){
-                charges = add(charges, shipment.FTDDeliveryFees); 
-            }
-
-            if(shipment.TFEDeliveryFees && shipment.TFEDeliveryFees > 0){
-                charges = add(charges, shipment.TFEDeliveryFees); 
-            }
-        });
-        return charges;
-    }
-
-    function _getServiceFees(shipments){
-        var charges = 0;
-        _.each(shipments, function(shipment){
-            if(shipment.FTDServiceFees && shipment.FTDServiceFees > 0){
-                charges = add(charges, shipment.FTDServiceFees); 
-            }
-
-            if(shipment.TFEServiceFees && shipment.TFEServiceFees > 0){
-                charges = add(charges, shipment.TFEServiceFees); 
-            }
-        });
-        return charges;
-    }
-
     function _determineEithers(shipment, buyerxp) {
+        // E's - line items that can be shipped to either TFE or FTD (defined on li.xp.Destination = E)
+        // T's - line items that can only be shipped to TFE (defined on li.xp.Destination = T)
+        // F's - line items that can only be shipped to FTD (defined on li.xp.Destination = F)
+
         var lineitems = _getDestinations(shipment);
         var destinationGroup = _.groupBy(lineitems, function(li) {
             return li.xp.Destination;
         });
 
-        //if there are any eithers (li.xp.Destination = 'E'), then run algorithm
+        //if there are any E's in shipment then run algorithm
         if (destinationGroup['E'] && destinationGroup['E'].length > 0) {
 
             var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
@@ -556,49 +505,30 @@ function bachWiredOrdersService($q) {
             var destination;
 
             if (nonEDestinations.length === 0) {
-                //this is a very volatile grouping since all line items are eithers
-                //we want to keep previous grouping and only change it if absolutely necessary
-                var previousGrouping = _.groupBy(shipment, function(li) {
-                    return li.xp.Destination;
-                });
+                //all line items in this shipment are E's
+                //determine where the ENTIRE shipment should go (either F or T)
+                destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
+                return setDestination(shipment, destination);
 
-                var hadFTDGrouping = typeof previousGrouping['F'] !== 'undefined';
-                var hadTFEGrouping = typeof previousGrouping['T'] !== 'undefined';
-
-                if (hadFTDGrouping && !hadTFEGrouping) {
-                    return setDestination(shipment, 'F');
-
-                } else if (!hadFTDGrouping && hadTFEGrouping) {
-                    return setDestination(shipment, 'T');
-
-                } else if (hadFTDGrouping && hadTFEGrouping) {
-                    //if had both TFE and FTD previously, favor the majority
-                    var FTDCount = previousGrouping['F'].length;
-                    var TFECount = previousGrouping['T'].length;
-                    if (FTDCount !== TFECount) {
-                        //favor majority
-                        return setDestination(shipment, FTDCount > TFECount ? 'F' : 'T');
-                    } else {
-                        //if equal then diceroll
-                        destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
-                        return setDestination(shipment, destination);
-                    }
-                } else {
-                    //previous grouping hasn't changed, all still Eithers
-                    destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
-                    return setDestination(shipment, destination);
-                }
             } else if (nonEDestinations.length === 1) {
+                //there is only one type (either F or T) in this shipment
+                //set all E's to that type
                 destination = nonEDestinations[0];
                 return setDestination(shipment, destination);
+
             } else {
-                var preferredDestination = ftd.OrderPercentage > tfe.OrderPercentage ? ftd : tfe;
+                //there are both F and T types in this shipment
+                //figure out how many E's to send in each shipment
+
+                var preferredDestination = ftd.OrderPercentage > tfe.OrderPercentage ? ftd : tfe; //give preference to network with higher order percentage
                 var otherDestination = preferredDestination.type === 'F' ? tfe : ftd;
 
                 var eitherTotal = getLineTotalSum(destinationGroup['E']);
                 var preferredTotal = getLineTotalSum(destinationGroup[preferredDestination.type]);
                 var otherTotal = getLineTotalSum(destinationGroup[otherDestination.type]);
 
+                // find least amount of E's to meet preferred's min requirements
+                // send the rest to other
                 if (eitherTotal + preferredTotal >= preferredDestination.MinOrderPrice.Price) {
                     return satisfyRequirements(destinationGroup['E'], preferredTotal, preferredDestination)
                         .then(function(remainingEithers) {
@@ -606,6 +536,8 @@ function bachWiredOrdersService($q) {
                             if (remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice.Price) {
                                 return satisfyRequirements(remainingEithers, otherTotal, otherDestination)
                                     .then(function(lastEithers) {
+                                        //both requirements have been satisfied
+                                        //split up the remainder based on order percentages
                                         _.each(lastEithers, function(li) {
                                             destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
                                             return setDestination([li], destination);
@@ -617,17 +549,37 @@ function bachWiredOrdersService($q) {
                             }
                         });
 
+                } else if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
+                    //preferred network's requirements can't be met
+                    //find least amount of E's to meet other's min reqs
+                    //send the rest to preferred
+
+                    return satisfyRequirements(destinationGroup['E'], otherTotal, otherDestination)
+                        .then(function(remainingEithers){
+                            if(remainingEithers){
+                                destination = otherDestination.type;
+                                return setDestination(remainingEithers, destination);
+                            }
+                        });
                 } else {
-                    if (eitherTotal + otherTotal >= otherDestination.MinOrderPrice.Price) {
-                        destination = otherDestination.type;
-                        return setDestination(destinationGroup['E'], otherDestination.type);
-                    } else {
-                        destination = preferredDestination.type;
-                        return setDestination(destinationGroup['E'], preferredDestination.type);
-                    }
+                    //neither requirements can be met
+                    //split up E's based on order percentages
+
+                    destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
+                    return setDestination(destinationGroup['E'], preferredDestination.type);
                 }
             }
         }
+    }
+
+    function _getServiceFees(shipments){
+        var serviceFees = _.pluck(shipments, 'WiredServiceFees');
+        return add.apply(null, serviceFees);
+    }
+
+    function _getDeliveryFees(shipments){
+        var deliveryFees = _.pluck(shipments, 'WiredDeliveryFees');
+        return add.apply(null, deliveryFees);
     }
 
 
@@ -693,9 +645,12 @@ function bachWiredOrdersService($q) {
         }
     }
 
-    function add(a, b){
-        //safely adds currency by avoiding floating point math
-        return ((a * 100) + (b * 100)) / 100;
+    function add(){
+        //adds currency safely by avoiding floating point math
+        var sum = _.reduce(arguments, function(a, b){
+            return ((a * 100) + (b * 100)) / 100;
+        }, 0);
+        return sum;
     }
 
     return service;

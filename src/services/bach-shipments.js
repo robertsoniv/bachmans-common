@@ -7,8 +7,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
     var service = {
         Group: _group,
         Create: _create,
-        List: _list,
-        CalculateShippingCost: _calculateShippingCost
+        List: _list
     };
 
     function _group(lineitems, buyerxp){
@@ -94,29 +93,44 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
 
     function shipmentTotals(shipments){
         var ftd = _.findWhere(_buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
-        var tfe = _.findWhere(_buyerxp.wireOrder.OutgoingOrders, {Name: 'Teleflora.com'});
         _.each(shipments, function(shipment){
             shipment.Cost = 0;
             shipment.Tax = 0;
-            shipment.FTDServiceFees = 0;
-            shipment.FTDDeliveryFees = 0;
-            shipment.TFEServiceFees = 0;
-            shipment.TFEDeliveryFees = 0;
+            shipment.WiredServiceFees = 0;
+            shipment.WiredDeliveryFees = 0;
+            shipment.DeliveryCharges = 0;
+
+            var standardDeliveryCharges = 0; //charges for LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
+            var wiredOrderCost = 0; //charges for TFE/FTD
+            var nonDeliveryCharges = 0; //charges for Assembly, Placement etc.
+
             _.each(shipment, function(li){
                 if(li.xp) {
                     li.xp.Tax = li.xp.Tax || 0;
                     shipment.Cost = add(shipment.Cost, li.LineTotal);
                     shipment.Tax = add(shipment.Tax, li.xp.Tax);
                 }
+
+                _.each(li.xp.deliveryFeesDtls, function(charge, type){
+                    if(_.contains(['LocalDelivery', 'Standard Delivery', 'InStorePickUp', 'Courier', 'USPS', 'UPS', 'UPS Charges', 'Event'], type)){
+                        standardDeliveryCharges = add(standardDeliveryCharges, charge);
+                    } else {
+                        nonDeliveryCharges = add(nonDeliveryCharges, charge);
+                    }
+                });
             });
-            if(shipment[0].xp.Destination && shipment[0].xp.Destination === 'F'){
-                shipment.FTDServiceFees = add(ftd.WiredServiceFees, shipment.FTDServiceFees);
-                shipment.FTDDeliveryFees = add(ftd.WiredDeliveryFees, shipment.FTDDeliveryFees);
+            if(shipment[0].xp.Destination && _.contains(['F', 'T'], shipment[0].xp.Destination) ){
+                //TODO: per chris there will only be one fee for BOTH wired order types
+                //so we can clean up the data model a bit - maybe store on buyerxp.wireOrder.OutgoingOrders[ServiceFee and DeliveryFee]
+                shipment.WiredServiceFees = add(ftd.WiredServiceFees, shipment.WiredServiceFees);
+                shipment.WiredDeliveryFees = add(ftd.WiredDeliveryFees, shipment.WiredDeliveryFees);
             }
-            if(shipment[0].xp.Destination && shipment[0].xp.Destination === 'T') {
-                shipment.TFEServiceFees = add(tfe.WiredServiceFees, shipment.TFEServiceFees);
-                shipment.TFEDeliveryFees = add(tfe.WiredDeliveryFees, shipment.TFEDeliveryFees);
-            }
+
+            wiredOrderCost = shipment.WiredServiceFees + shipment.WiredDeliveryFees;
+
+            //only either wired delivery charges OR standard delivery charges should apply - never both
+            shipment.DeliveryCharges = nonDeliveryCharges + (wiredOrderCost || standardDeliveryCharges); 
+
             shipment.Total = add(shipment.Cost, shipment.Tax);
         });
         return shipments;
@@ -155,7 +169,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
                     'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
-                    'DeliveryCharges': '', //TODO: find out how to get this value
+                    'DeliveryCharges': shipment.DeliveryCharges,
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress
@@ -217,46 +231,6 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
                         return shipments;
                     });
             });
-    }
-
-    function _calculateShippingCost(args, shipments){
-        var wiredOrderCost = 0;
-        var shippingCost = 0;
-        var taxCost = 0;
-
-        _.each(shipments, function(shipment){
-            if(shipment.FTDDeliveryFees && shipment.FTDDeliveryFees > 0){
-                wiredOrderCost = add(wiredOrderCost, shipment.FTDDeliveryFees); 
-            }
-
-            if(shipment.FTDServiceFees && shipment.FTDServiceFees > 0){
-                wiredOrderCost = add(wiredOrderCost, shipment.FTDServiceFees); 
-            }
-
-            if(shipment.TFEDeliveryFees && shipment.TFEDeliveryFees > 0){
-                wiredOrderCost = add(wiredOrderCost, shipment.TFEDeliveryFees); 
-            }
-
-            if(shipment.TFEServiceFees && shipment.TFEServiceFees > 0){
-                wiredOrderCost = add(wiredOrderCost, shipment.TFEServiceFees); 
-            }
-            
-        });
-
-        return OrderCloudSDK.LineItems.List('outgoing', args).then(function(lineitemlist){
-            _.each(lineitemlist.Items, function(li){
-                shippingCost = add(shippingCost, li.xp.deliveryCharges || 0);
-                taxCost = add(taxCost, li.xp.Tax);
-            });
-
-            return OrderCloudSDK.Orders.Patch('outgoing', args, {
-                ShippingCost: wiredOrderCost || shippingCost, //only one of these will apply
-                TaxCost: taxCost,
-                xp: {
-                    Tax: taxCost.toFixed(2)
-                }
-            });
-        });
     }
 
     /* * * Start Internal Functions * * */ 
