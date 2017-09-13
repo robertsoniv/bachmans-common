@@ -453,8 +453,12 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     }
 
     function formatDate(datetime){
-        var date = new Date(datetime);
-        return (date.getMonth()+1 < 10 ? '0' +(date.getMonth() + 1) : date.getMonth() + 1) +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()) +'/'+ date.getFullYear();
+        if(datetime){
+            var date = new Date(datetime);
+            return (date.getFullYear() +'/'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
+        } else {
+            return 'N/A';
+        }
     }
 
     function printStatus(li){
