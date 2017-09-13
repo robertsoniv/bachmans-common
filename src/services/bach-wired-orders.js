@@ -3,9 +3,7 @@ angular.module('bachmans-common')
 
 function bachWiredOrdersService($q) {
     var service = {
-        DetermineEithers: _determineEithers,
-        GetServiceFees: _getServiceFees,
-        GetDeliveryFees: _getDeliveryFees
+        DetermineEithers: _determineEithers
     };
 
     function _determineEithers(shipment, buyerxp) {
@@ -101,17 +99,6 @@ function bachWiredOrdersService($q) {
         }
     }
 
-    function _getServiceFees(shipments){
-        var serviceFees = _.pluck(shipments, 'WiredServiceFees');
-        return add.apply(null, serviceFees);
-    }
-
-    function _getDeliveryFees(shipments){
-        var deliveryFees = _.pluck(shipments, 'WiredDeliveryFees');
-        return add.apply(null, deliveryFees);
-    }
-
-
     function _getDestinations(lineitems) {
         lineitems = angular.copy(lineitems);
         _.each(lineitems, function(line) {
@@ -151,7 +138,6 @@ function bachWiredOrdersService($q) {
     function setDestination(shipment, type) {
         _.each(shipment, function(li) {
             li.xp.Destination = type;
-            li.xp.Status = 'OnHold';
         });
     }
 
@@ -172,14 +158,6 @@ function bachWiredOrdersService($q) {
             setDestination([add], destination.type);
             return satisfyRequirements(lineitems, currentTotal, destination.MinOrderPrice.Price);
         }
-    }
-
-    function add(){
-        //adds currency safely by avoiding floating point math
-        var sum = _.reduce(arguments, function(a, b){
-            return ((a * 100) + (b * 100)) / 100;
-        }, 0);
-        return sum;
     }
 
     return service;

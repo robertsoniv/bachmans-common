@@ -2,16 +2,14 @@ angular.module('bachmans-common')
     .factory('bachShipments', bachShipmentsService)
 ;
 
-function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $resource, nodeapiurl){
-    var _buyerxp = {};
+function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachBuyerXp, $resource, nodeapiurl){
     var service = {
         Group: _group,
         Create: _create,
         List: _list
     };
 
-    function _group(lineitems, buyerxp){
-        _buyerxp = buyerxp;
+    function _group(lineitems){
        var initialGrouping = _.groupBy(lineitems, function(lineitem){
 
             var recipient = '';
@@ -78,7 +76,8 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
     function splitWiredOrders(shipments){
         var splitShipments = [];
         _.each(shipments, function(shipment){
-            bachWiredOrders.DetermineEithers(shipment, _buyerxp); //sets F or T for all li.xp.Destination
+            var buyerxp = bachBuyerXp.GetCache().xp;
+            bachWiredOrders.DetermineEithers(shipment, buyerxp); //sets F or T for all li.xp.Destination
             
             var grouped = _.groupBy(shipment, function(li){
                 return li.xp.Destination;
@@ -92,13 +91,15 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
 
 
     function shipmentTotals(shipments){
-        var ftd = _.findWhere(_buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
+        var buyerxp = bachBuyerXp.GetCache().xp;
+        var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
         _.each(shipments, function(shipment){
             shipment.Cost = 0;
             shipment.Tax = 0;
             shipment.WiredServiceFees = 0;
             shipment.WiredDeliveryFees = 0;
             shipment.DeliveryCharges = 0;
+            shipment.deliveryFeesDtls = {}; //cumulative unique delivery fees details object
 
             var standardDeliveryCharges = 0; //charges for LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
             var wiredOrderCost = 0; //charges for TFE/FTD
@@ -117,6 +118,13 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
                     } else {
                         nonDeliveryCharges = add(nonDeliveryCharges, charge);
                     }
+                    if(!shipment.deliveryFeesDtls[type]){
+                        //fee type doesn't exist - create it and set it to first val
+                        shipment.deliveryFeesDtls[type] = charge;
+                    } else {
+                        //fee type already exists - add to it
+                        shipment.deliveryFeesDtls[type] = add(shipment.deliveryFeesDtls[type], charge);
+                    }
                 });
             });
             if(shipment[0].xp.Destination && _.contains(['F', 'T'], shipment[0].xp.Destination) ){
@@ -131,7 +139,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
             //only either wired delivery charges OR standard delivery charges should apply - never both
             shipment.DeliveryCharges = nonDeliveryCharges + (wiredOrderCost || standardDeliveryCharges); 
 
-            shipment.Total = add(shipment.Cost, shipment.Tax);
+            shipment.Total = add(shipment.Cost, shipment.Tax, shipment.DeliveryCharges);
         });
         return shipments;
     }

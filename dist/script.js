@@ -86,6 +86,7 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
     var hasBeenCalled = false;
     var service = {
         Get: _get,
+        GetCache: _getCache,
         Update: _update,
         Patch: _patch
     };
@@ -119,6 +120,11 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
         }
 
         return dfd.promise;
+    }
+
+    function _getCache(){
+        //don't use this in resolve, may not be set yet
+        return buyerxp;
     }
 
     function _update(token, update){
@@ -188,20 +194,18 @@ function bachGiftCards(nodeapiurl, $resource, toastr, $http, OrderCloudSDK){
     return service;
 }
 
-bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK', 'bachWiredOrders', '$resource', 'nodeapiurl'];angular.module('bachmans-common')
+bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK', 'bachWiredOrders', 'bachBuyerXp', '$resource', 'nodeapiurl'];angular.module('bachmans-common')
     .factory('bachShipments', bachShipmentsService)
 ;
 
-function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $resource, nodeapiurl){
-    var _buyerxp = {};
+function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachBuyerXp, $resource, nodeapiurl){
     var service = {
         Group: _group,
         Create: _create,
         List: _list
     };
 
-    function _group(lineitems, buyerxp){
-        _buyerxp = buyerxp;
+    function _group(lineitems){
        var initialGrouping = _.groupBy(lineitems, function(lineitem){
 
             var recipient = '';
@@ -268,7 +272,8 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
     function splitWiredOrders(shipments){
         var splitShipments = [];
         _.each(shipments, function(shipment){
-            bachWiredOrders.DetermineEithers(shipment, _buyerxp); //sets F or T for all li.xp.Destination
+            var buyerxp = bachBuyerXp.GetCache().xp;
+            bachWiredOrders.DetermineEithers(shipment, buyerxp); //sets F or T for all li.xp.Destination
             
             var grouped = _.groupBy(shipment, function(li){
                 return li.xp.Destination;
@@ -282,13 +287,15 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
 
 
     function shipmentTotals(shipments){
-        var ftd = _.findWhere(_buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
+        var buyerxp = bachBuyerXp.GetCache().xp;
+        var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
         _.each(shipments, function(shipment){
             shipment.Cost = 0;
             shipment.Tax = 0;
             shipment.WiredServiceFees = 0;
             shipment.WiredDeliveryFees = 0;
             shipment.DeliveryCharges = 0;
+            shipment.deliveryFeesDtls = {}; //cumulative unique delivery fees details object
 
             var standardDeliveryCharges = 0; //charges for LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
             var wiredOrderCost = 0; //charges for TFE/FTD
@@ -307,6 +314,13 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
                     } else {
                         nonDeliveryCharges = add(nonDeliveryCharges, charge);
                     }
+                    if(!shipment.deliveryFeesDtls[type]){
+                        //fee type doesn't exist - create it and set it to first val
+                        shipment.deliveryFeesDtls[type] = charge;
+                    } else {
+                        //fee type already exists - add to it
+                        shipment.deliveryFeesDtls[type] = add(shipment.deliveryFeesDtls[type], charge);
+                    }
                 });
             });
             if(shipment[0].xp.Destination && _.contains(['F', 'T'], shipment[0].xp.Destination) ){
@@ -321,7 +335,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, $reso
             //only either wired delivery charges OR standard delivery charges should apply - never both
             shipment.DeliveryCharges = nonDeliveryCharges + (wiredOrderCost || standardDeliveryCharges); 
 
-            shipment.Total = add(shipment.Cost, shipment.Tax);
+            shipment.Total = add(shipment.Cost, shipment.Tax, shipment.DeliveryCharges);
         });
         return shipments;
     }
@@ -474,9 +488,7 @@ bachWiredOrdersService.$inject = ['$q'];angular.module('bachmans-common')
 
 function bachWiredOrdersService($q) {
     var service = {
-        DetermineEithers: _determineEithers,
-        GetServiceFees: _getServiceFees,
-        GetDeliveryFees: _getDeliveryFees
+        DetermineEithers: _determineEithers
     };
 
     function _determineEithers(shipment, buyerxp) {
@@ -572,17 +584,6 @@ function bachWiredOrdersService($q) {
         }
     }
 
-    function _getServiceFees(shipments){
-        var serviceFees = _.pluck(shipments, 'WiredServiceFees');
-        return add.apply(null, serviceFees);
-    }
-
-    function _getDeliveryFees(shipments){
-        var deliveryFees = _.pluck(shipments, 'WiredDeliveryFees');
-        return add.apply(null, deliveryFees);
-    }
-
-
     function _getDestinations(lineitems) {
         lineitems = angular.copy(lineitems);
         _.each(lineitems, function(line) {
@@ -622,7 +623,6 @@ function bachWiredOrdersService($q) {
     function setDestination(shipment, type) {
         _.each(shipment, function(li) {
             li.xp.Destination = type;
-            li.xp.Status = 'OnHold';
         });
     }
 
@@ -643,14 +643,6 @@ function bachWiredOrdersService($q) {
             setDestination([add], destination.type);
             return satisfyRequirements(lineitems, currentTotal, destination.MinOrderPrice.Price);
         }
-    }
-
-    function add(){
-        //adds currency safely by avoiding floating point math
-        var sum = _.reduce(arguments, function(a, b){
-            return ((a * 100) + (b * 100)) / 100;
-        }, 0);
-        return sum;
     }
 
     return service;
