@@ -161,6 +161,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
             
             var count = index + 1;
             var li = shipment[0];
+            var isAnon = order.FromUserID === 'anon-template-user';
 
             var shipmentObj = {
                 'BuyerID': buyerid,
@@ -173,9 +174,13 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     'PrintStatus': printStatus(li),
                     'Direction': 'Outgoing', //will always be outgoing if set from app
                     'DeliveryMethod': deliveryMethod(li), //possible values: FTD, TFE, LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
+                    'DateSubmitted': formatDate(order.DateSubmitted),
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
+                    'SenderName': isAnon ? order.BillingAddress.FirstName + ' ' + order.BillingAddress.LastName : order.Fromuser.FirstName + ' ' + order.FromUser.LastName,
+                    'FromUserID': order.FromUserID,
+                    'CSRID': order.xp.CSRID || 'Web', //will be populated if placed on OMS
                     'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
                     'DeliveryCharges': shipment.DeliveryCharges,
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
@@ -259,7 +264,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     function formatDate(datetime){
         if(datetime){
             var date = new Date(datetime);
-            return (date.getFullYear() +'/'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
+            return (date.getFullYear() +'-'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'-'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
         } else {
             return 'N/A';
         }
