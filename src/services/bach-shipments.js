@@ -2,7 +2,7 @@ angular.module('bachmans-common')
     .factory('bachShipments', bachShipmentsService)
 ;
 
-function bachShipmentsService($q, buyerid, OrderCloudSDK){
+function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachBuyerXp, $resource, nodeapiurl){
     var service = {
         Group: _group,
         Create: _create,
@@ -10,7 +10,6 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
     };
 
     function _group(lineitems){
-
        var initialGrouping = _.groupBy(lineitems, function(lineitem){
 
             var recipient = '';
@@ -26,16 +25,15 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             // every line item with a unique requested delivery date must be a unique shipment
             var deliverydate = lineitem.xp.DeliveryDate || '';
 
+            // group line items together if they are wired order - they will be further segmented later
+            var wiredorder = lineitem.xp.Destination && _.contains(['T', 'F', 'E'], lineitem.xp.Destination);
+
             // every line item with a unique delivery method must be a unique shipment
             var deliverymethod = lineitem.xp.DeliveryMethod || '';
-            
-            // every line item with a unique status must be a unique shipment
-            // normalize statuses - previously FTDIncoming/Outgoing and TFEIncoming/Outgoing
-            if(lineitem.xp.Status && lineitem.xp.Status.indexOf('FTD') > -1) lineitem.xp.Status = 'FTD';
-            if(lineitem.xp.Status && lineitem.xp.Status.indexOf('TFE') > -1) lineitem.xp.Status = 'TFE';
+
             var status = lineitem.xp.Status || 'Open';
 
-            return recipient + shipto + deliverydate + deliverymethod + status;
+            return recipient + shipto + deliverydate + deliverymethod + status + wiredorder;
         });
         return splitByProductFromStore(_.values(initialGrouping));
     }
@@ -66,32 +64,88 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
         _.each(shipments, function(shipment, sindex){
             _.each(shipment, function(lineitem, lindex){
                 if(lineitem.Product.xp.isEvent && shipment.length > 1){
-                    var event = shipment[sindex].splice(lindex, 1);
+                    //splice event line items out of a shipment and into their own shipment
+                    var event = shipments[sindex].splice(lindex, 1);
                     shipments.push(event);
                 }
             });
         });
-        return shipmentTotals(shipments);
+        return splitWiredOrders(shipments);
     }
 
+    function splitWiredOrders(shipments){
+        var splitShipments = [];
+        _.each(shipments, function(shipment){
+            var buyerxp = bachBuyerXp.GetCache().xp;
+            bachWiredOrders.DetermineEithers(shipment, buyerxp); //sets F or T for all li.xp.Destination
+            
+            var grouped = _.groupBy(shipment, function(li){
+                return li.xp.Destination;
+            });
+            _.each(grouped, function(group){
+                splitShipments.push(group);
+            });
+        });
+        return shipmentTotals(splitShipments);
+    }
+
+
     function shipmentTotals(shipments){
+        var buyerxp = bachBuyerXp.GetCache().xp;
+        var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
         _.each(shipments, function(shipment){
             shipment.Cost = 0;
             shipment.Tax = 0;
+            shipment.WiredServiceFees = 0;
+            shipment.WiredDeliveryFees = 0;
+            shipment.DeliveryCharges = 0;
+            shipment.deliveryFeesDtls = {}; //cumulative unique delivery fees details object
+
+            var standardDeliveryCharges = 0; //charges for LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
+            var wiredOrderCost = 0; //charges for TFE/FTD
+            var nonDeliveryCharges = 0; //charges for Assembly, Placement etc.
+
             _.each(shipment, function(li){
-                if(li && li.xp) {
+                if(li.xp) {
                     li.xp.Tax = li.xp.Tax || 0;
-                    shipment.Cost = ((shipment.Cost * 100) + li.LineTotal * 100) / 100;
-                    shipment.Tax = ((shipment.Tax * 100) + li.xp.Tax * 100) / 100;
+                    shipment.Cost = add(shipment.Cost, li.LineTotal);
+                    shipment.Tax = add(shipment.Tax, li.xp.Tax);
                 }
+
+                _.each(li.xp.deliveryFeesDtls, function(charge, type){
+                    if(_.contains(['LocalDelivery', 'Standard Delivery', 'InStorePickUp', 'Courier', 'USPS', 'UPS', 'UPS Charges', 'Event'], type)){
+                        standardDeliveryCharges = add(standardDeliveryCharges, charge);
+                    } else {
+                        nonDeliveryCharges = add(nonDeliveryCharges, charge);
+                    }
+                    if(!shipment.deliveryFeesDtls[type]){
+                        //fee type doesn't exist - create it and set it to first val
+                        shipment.deliveryFeesDtls[type] = charge;
+                    } else {
+                        //fee type already exists - add to it
+                        shipment.deliveryFeesDtls[type] = add(shipment.deliveryFeesDtls[type], charge);
+                    }
+                });
             });
-            shipment.Total = ((shipment.Cost * 100) + (shipment.Tax)) / 100;
+            if(shipment[0].xp.Destination && _.contains(['F', 'T'], shipment[0].xp.Destination) ){
+                //TODO: per chris there will only be one fee for BOTH wired order types
+                //so we can clean up the data model a bit - maybe store on buyerxp.wireOrder.OutgoingOrders[ServiceFee and DeliveryFee]
+                shipment.WiredServiceFees = add(ftd.WiredServiceFees, shipment.WiredServiceFees);
+                shipment.WiredDeliveryFees = add(ftd.WiredDeliveryFees, shipment.WiredDeliveryFees);
+            }
+
+            wiredOrderCost = shipment.WiredServiceFees + shipment.WiredDeliveryFees;
+
+            //only either wired delivery charges OR standard delivery charges should apply - never both
+            shipment.DeliveryCharges = nonDeliveryCharges + (wiredOrderCost || standardDeliveryCharges); 
+
+            shipment.Total = add(shipment.Cost, shipment.Tax, shipment.DeliveryCharges);
         });
         return shipments;
     }
 
-    function _create(lineitems, order, fromSF){
-        var shipments = _group(lineitems);
+    function _create(lineitems, order, buyerxp){
+        var shipments = _group(lineitems, buyerxp);
 
         var shipmentsQueue = [];
         _.each(shipments, function(shipment, index){
@@ -118,76 +172,37 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                     'Status': status(li),
                     'PrintStatus': printStatus(li),
                     'Direction': 'Outgoing', //will always be outgoing if set from app
-                    'DeliveryMethod': li.xp.DeliveryMethod, //possible values: LocalDelivery, FTD, TFE, InStorePickUp, Courier, USPS, UPS, Event
+                    'DeliveryMethod': deliveryMethod(li), //possible values: FTD, TFE, LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
                     'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
+                    'DeliveryCharges': shipment.DeliveryCharges,
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress
                 }
             };
-            if(fromSF){
-                //SF cant't have a shipments decorator (doesnt work with impersonated calls) 
-                // so we need to explicitly call save item with impersonated AsAdmin method
-
-                //TODO: consider moving this to an integration so we dont need this hacky workaround
-                // and can remove ShipmentAdmin role on SF
-                shipmentsQueue.push(function(){
-                    return OrderCloudSDK.AsAdmin().Shipments.Create(shipmentObj)
-                        .then(function(shipmentResponse){
-                            var queue = [];
-                            _.each(shipmentObj.Items, function(item){
-                                shipmentResponse.Items = [];
-                                shipmentResponse.Items.push(item);
-                                queue.push(OrderCloudSDK.AsAdmin().Shipments.SaveItem(shipmentResponse.ID, item));
-                            });
-                            return $q.all(queue)
-                                .then(function(){
-                                    return shipmentResponse;
-                                });
-                        });
-                }());
-            } else {
-                shipmentsQueue.push(OrderCloudSDK.Shipments.Create(shipmentObj));
-            }
             
+            shipmentsQueue.push(nodeShipmentCreate(order.ID, shipmentObj));
         });
 
         return $q.all(shipmentsQueue);
     }
 
-    /* * * Start Internal Functions * * */ 
-
-    function status(li){
-        if(li.xp.DeliveryMethod && (li.xp.DeliveryMethod.indexOf('FTD') > -1 || li.xp.DeliveryMethod.indexOf('TFE') > -1)){
-            return 'OnHold';
-        } else if(li.xp.Status && li.xp.Status === 'OnHold') {
-            return 'OnHold';
-        } else if(li.xp.addressType && ['Funeral', 'Church', 'Cemetary'].indexOf(li.xp.addressType) > -1){
-            //these orders are typically difficult to fulfill so CSRs need to see them on hold screen right away
-            return 'OnHold';
-        } else {
-            return 'New';
-        }
-    }
-
-    function formatDate(datetime){
-        if(datetime){
-            var date = new Date(datetime);
-            return (date.getFullYear() +'/'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
-        } else {
-            return 'N/A';
-        }
-    }
-
-    function printStatus(li){
-        if( (li.xp.DeliveryMethod === 'LocalDelivery') || ( li.xp.DeliveryMethod === 'InStorePickup' && li.xp.ProductFromStore === 'OtherStore')) {
-            return 'NotPrinted';
-        } else {
-            return 'NotNeeded';
-        }
+    function nodeShipmentCreate(orderID, shipmentObj){
+        var body = {
+            orderID: orderID,
+            Shipment: shipmentObj
+        };
+        return $resource(nodeapiurl + '/shipments/create', {}, {
+            call: {
+                method: 'POST', 
+                headers: {
+                    'oc-token': OrderCloudSDK.GetToken()
+                }
+            }
+        }).call(body).$promise;
     }
 
     function _list(orderID){
@@ -224,6 +239,53 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                         return shipments;
                     });
             });
+    }
+
+    /* * * Start Internal Functions * * */ 
+
+    function status(li){
+        if(li.xp.Destination && _.contains(['F', 'T'], li.xp.Destination)){
+            return 'OnHold';
+        } else if(li.xp.Status && li.xp.Status === 'OnHold') {
+            return 'OnHold';
+        } else if(li.xp.addressType && _.contains(['Funeral', 'Church', 'Cemetary'], li.xp.addressType)){
+            //these orders are typically difficult to fulfill so CSRs need to see them on hold screen right away
+            return 'OnHold';
+        } else {
+            return 'New';
+        }
+    }
+
+    function formatDate(datetime){
+        if(datetime){
+            var date = new Date(datetime);
+            return (date.getFullYear() +'/'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
+        } else {
+            return 'N/A';
+        }
+    }
+
+    function printStatus(li){
+        if( (li.xp.DeliveryMethod === 'LocalDelivery') || ( li.xp.DeliveryMethod === 'InStorePickup' && li.xp.ProductFromStore === 'OtherStore')) {
+            return 'NotPrinted';
+        } else {
+            return 'NotNeeded';
+        }
+    }
+
+    function deliveryMethod(li){
+        if(li.xp && li.xp.Destination && _.contains(['F', 'T'], li.xp.Destination)) {
+            return li.xp.Destination === 'F' ? 'FTD' : 'TFE';
+        } else {
+            return li.xp.DeliveryMethod;
+        }
+    }
+
+    function add(){
+        //adds currency safely by avoiding floating point math
+        return _.reduce(arguments, function(a, b){
+            return ((a * 100) + (b * 100)) / 100;
+        }, 0);
     }
 
     return service;

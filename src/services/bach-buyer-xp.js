@@ -9,6 +9,7 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
     var hasBeenCalled = false;
     var service = {
         Get: _get,
+        GetCache: _getCache,
         Update: _update,
         Patch: _patch
     };
@@ -42,6 +43,11 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
         }
 
         return dfd.promise;
+    }
+
+    function _getCache(){
+        //don't use this in resolve, may not be set yet
+        return buyerxp;
     }
 
     function _update(token, update){

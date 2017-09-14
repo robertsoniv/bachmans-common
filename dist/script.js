@@ -2,6 +2,57 @@ angular.module('bachmans-common', [
 
 ]);
 
+OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
+    .config(OrderCloudSDKBuyerXP);
+
+
+function OrderCloudSDKBuyerXP($provide){
+    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
+        $delegate.Buyers.Get = function(){
+            var token = $delegate.GetToken();
+            return bachBuyerXp.Get(token);
+        };
+
+        $delegate.Buyers.List = function(){
+            return $delegate.Buyers.Get()
+                .then(function(buyerxp){
+                    return {
+                        Items: [buyerxp], 
+                        Meta: {
+                            Page: 1, 
+                            PageSize: 1, 
+                            TotalPages: 1, 
+                            TotalCount: 1, 
+                            ItemRange: [1, 1]
+                        }
+                    };
+                });
+        };
+
+        $delegate.Buyers.Update = function(){
+            var update = [].slice.call(arguments)[1]; //update obj is second argument
+            var token = $delegate.GetToken();
+            if(update && update.xp) {
+                return bachBuyerXp.Update(token, update.xp);
+            } else {
+                return $q.reject('Missing body');
+            }
+        };
+
+        $delegate.Buyers.Patch = function(){
+            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
+            var token = $delegate.GetToken();
+            if(patch) {
+                return bachBuyerXp.Patch(token, patch);
+            } else {
+                return $q.reject('Missing body');
+            }
+        };
+
+        return $delegate;
+    }]);
+}
+
 bachAssignments.$inject = ['nodeapiurl', '$resource', 'OrderCloudSDK'];angular.module('bachmans-common')
     .factory('bachAssignments', bachAssignments);
 
@@ -35,6 +86,7 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
     var hasBeenCalled = false;
     var service = {
         Get: _get,
+        GetCache: _getCache,
         Update: _update,
         Patch: _patch
     };
@@ -68,6 +120,11 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
         }
 
         return dfd.promise;
+    }
+
+    function _getCache(){
+        //don't use this in resolve, may not be set yet
+        return buyerxp;
     }
 
     function _update(token, update){
@@ -137,11 +194,11 @@ function bachGiftCards(nodeapiurl, $resource, toastr, $http, OrderCloudSDK){
     return service;
 }
 
-bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK'];angular.module('bachmans-common')
+bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK', 'bachWiredOrders', 'bachBuyerXp', '$resource', 'nodeapiurl'];angular.module('bachmans-common')
     .factory('bachShipments', bachShipmentsService)
 ;
 
-function bachShipmentsService($q, buyerid, OrderCloudSDK){
+function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachBuyerXp, $resource, nodeapiurl){
     var service = {
         Group: _group,
         Create: _create,
@@ -149,7 +206,6 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
     };
 
     function _group(lineitems){
-
        var initialGrouping = _.groupBy(lineitems, function(lineitem){
 
             var recipient = '';
@@ -165,16 +221,15 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             // every line item with a unique requested delivery date must be a unique shipment
             var deliverydate = lineitem.xp.DeliveryDate || '';
 
+            // group line items together if they are wired order - they will be further segmented later
+            var wiredorder = lineitem.xp.Destination && _.contains(['T', 'F', 'E'], lineitem.xp.Destination);
+
             // every line item with a unique delivery method must be a unique shipment
             var deliverymethod = lineitem.xp.DeliveryMethod || '';
-            
-            // every line item with a unique status must be a unique shipment
-            // normalize statuses - previously FTDIncoming/Outgoing and TFEIncoming/Outgoing
-            if(lineitem.xp.Status && lineitem.xp.Status.indexOf('FTD') > -1) lineitem.xp.Status = 'FTD';
-            if(lineitem.xp.Status && lineitem.xp.Status.indexOf('TFE') > -1) lineitem.xp.Status = 'TFE';
+
             var status = lineitem.xp.Status || 'Open';
 
-            return recipient + shipto + deliverydate + deliverymethod + status;
+            return recipient + shipto + deliverydate + deliverymethod + status + wiredorder;
         });
         return splitByProductFromStore(_.values(initialGrouping));
     }
@@ -205,32 +260,88 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
         _.each(shipments, function(shipment, sindex){
             _.each(shipment, function(lineitem, lindex){
                 if(lineitem.Product.xp.isEvent && shipment.length > 1){
-                    var event = shipment[sindex].splice(lindex, 1);
+                    //splice event line items out of a shipment and into their own shipment
+                    var event = shipments[sindex].splice(lindex, 1);
                     shipments.push(event);
                 }
             });
         });
-        return shipmentTotals(shipments);
+        return splitWiredOrders(shipments);
     }
 
+    function splitWiredOrders(shipments){
+        var splitShipments = [];
+        _.each(shipments, function(shipment){
+            var buyerxp = bachBuyerXp.GetCache().xp;
+            bachWiredOrders.DetermineEithers(shipment, buyerxp); //sets F or T for all li.xp.Destination
+            
+            var grouped = _.groupBy(shipment, function(li){
+                return li.xp.Destination;
+            });
+            _.each(grouped, function(group){
+                splitShipments.push(group);
+            });
+        });
+        return shipmentTotals(splitShipments);
+    }
+
+
     function shipmentTotals(shipments){
+        var buyerxp = bachBuyerXp.GetCache().xp;
+        var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
         _.each(shipments, function(shipment){
             shipment.Cost = 0;
             shipment.Tax = 0;
+            shipment.WiredServiceFees = 0;
+            shipment.WiredDeliveryFees = 0;
+            shipment.DeliveryCharges = 0;
+            shipment.deliveryFeesDtls = {}; //cumulative unique delivery fees details object
+
+            var standardDeliveryCharges = 0; //charges for LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
+            var wiredOrderCost = 0; //charges for TFE/FTD
+            var nonDeliveryCharges = 0; //charges for Assembly, Placement etc.
+
             _.each(shipment, function(li){
-                if(li && li.xp) {
+                if(li.xp) {
                     li.xp.Tax = li.xp.Tax || 0;
-                    shipment.Cost = ((shipment.Cost * 100) + li.LineTotal * 100) / 100;
-                    shipment.Tax = ((shipment.Tax * 100) + li.xp.Tax * 100) / 100;
+                    shipment.Cost = add(shipment.Cost, li.LineTotal);
+                    shipment.Tax = add(shipment.Tax, li.xp.Tax);
                 }
+
+                _.each(li.xp.deliveryFeesDtls, function(charge, type){
+                    if(_.contains(['LocalDelivery', 'Standard Delivery', 'InStorePickUp', 'Courier', 'USPS', 'UPS', 'UPS Charges', 'Event'], type)){
+                        standardDeliveryCharges = add(standardDeliveryCharges, charge);
+                    } else {
+                        nonDeliveryCharges = add(nonDeliveryCharges, charge);
+                    }
+                    if(!shipment.deliveryFeesDtls[type]){
+                        //fee type doesn't exist - create it and set it to first val
+                        shipment.deliveryFeesDtls[type] = charge;
+                    } else {
+                        //fee type already exists - add to it
+                        shipment.deliveryFeesDtls[type] = add(shipment.deliveryFeesDtls[type], charge);
+                    }
+                });
             });
-            shipment.Total = ((shipment.Cost * 100) + (shipment.Tax)) / 100;
+            if(shipment[0].xp.Destination && _.contains(['F', 'T'], shipment[0].xp.Destination) ){
+                //TODO: per chris there will only be one fee for BOTH wired order types
+                //so we can clean up the data model a bit - maybe store on buyerxp.wireOrder.OutgoingOrders[ServiceFee and DeliveryFee]
+                shipment.WiredServiceFees = add(ftd.WiredServiceFees, shipment.WiredServiceFees);
+                shipment.WiredDeliveryFees = add(ftd.WiredDeliveryFees, shipment.WiredDeliveryFees);
+            }
+
+            wiredOrderCost = shipment.WiredServiceFees + shipment.WiredDeliveryFees;
+
+            //only either wired delivery charges OR standard delivery charges should apply - never both
+            shipment.DeliveryCharges = nonDeliveryCharges + (wiredOrderCost || standardDeliveryCharges); 
+
+            shipment.Total = add(shipment.Cost, shipment.Tax, shipment.DeliveryCharges);
         });
         return shipments;
     }
 
-    function _create(lineitems, order, fromSF){
-        var shipments = _group(lineitems);
+    function _create(lineitems, order, buyerxp){
+        var shipments = _group(lineitems, buyerxp);
 
         var shipmentsQueue = [];
         _.each(shipments, function(shipment, index){
@@ -257,76 +368,37 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
                     'Status': status(li),
                     'PrintStatus': printStatus(li),
                     'Direction': 'Outgoing', //will always be outgoing if set from app
-                    'DeliveryMethod': li.xp.DeliveryMethod, //possible values: LocalDelivery, FTD, TFE, InStorePickUp, Courier, USPS, UPS, Event
+                    'DeliveryMethod': deliveryMethod(li), //possible values: FTD, TFE, LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
                     'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
+                    'DeliveryCharges': shipment.DeliveryCharges,
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress
                 }
             };
-            if(fromSF){
-                //SF cant't have a shipments decorator (doesnt work with impersonated calls) 
-                // so we need to explicitly call save item with impersonated AsAdmin method
-
-                //TODO: consider moving this to an integration so we dont need this hacky workaround
-                // and can remove ShipmentAdmin role on SF
-                shipmentsQueue.push(function(){
-                    return OrderCloudSDK.AsAdmin().Shipments.Create(shipmentObj)
-                        .then(function(shipmentResponse){
-                            var queue = [];
-                            _.each(shipmentObj.Items, function(item){
-                                shipmentResponse.Items = [];
-                                shipmentResponse.Items.push(item);
-                                queue.push(OrderCloudSDK.AsAdmin().Shipments.SaveItem(shipmentResponse.ID, item));
-                            });
-                            return $q.all(queue)
-                                .then(function(){
-                                    return shipmentResponse;
-                                });
-                        });
-                }());
-            } else {
-                shipmentsQueue.push(OrderCloudSDK.Shipments.Create(shipmentObj));
-            }
             
+            shipmentsQueue.push(nodeShipmentCreate(order.ID, shipmentObj));
         });
 
         return $q.all(shipmentsQueue);
     }
 
-    /* * * Start Internal Functions * * */ 
-
-    function status(li){
-        if(li.xp.DeliveryMethod && (li.xp.DeliveryMethod.indexOf('FTD') > -1 || li.xp.DeliveryMethod.indexOf('TFE') > -1)){
-            return 'OnHold';
-        } else if(li.xp.Status && li.xp.Status === 'OnHold') {
-            return 'OnHold';
-        } else if(li.xp.addressType && ['Funeral', 'Church', 'Cemetary'].indexOf(li.xp.addressType) > -1){
-            //these orders are typically difficult to fulfill so CSRs need to see them on hold screen right away
-            return 'OnHold';
-        } else {
-            return 'New';
-        }
-    }
-
-    function formatDate(datetime){
-        if(datetime){
-            var date = new Date(datetime);
-            return (date.getFullYear() +'/'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
-        } else {
-            return 'N/A';
-        }
-    }
-
-    function printStatus(li){
-        if( (li.xp.DeliveryMethod === 'LocalDelivery') || ( li.xp.DeliveryMethod === 'InStorePickup' && li.xp.ProductFromStore === 'OtherStore')) {
-            return 'NotPrinted';
-        } else {
-            return 'NotNeeded';
-        }
+    function nodeShipmentCreate(orderID, shipmentObj){
+        var body = {
+            orderID: orderID,
+            Shipment: shipmentObj
+        };
+        return $resource(nodeapiurl + '/shipments/create', {}, {
+            call: {
+                method: 'POST', 
+                headers: {
+                    'oc-token': OrderCloudSDK.GetToken()
+                }
+            }
+        }).call(body).$promise;
     }
 
     function _list(orderID){
@@ -365,58 +437,124 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK){
             });
     }
 
+    /* * * Start Internal Functions * * */ 
+
+    function status(li){
+        if(li.xp.Destination && _.contains(['F', 'T'], li.xp.Destination)){
+            return 'OnHold';
+        } else if(li.xp.Status && li.xp.Status === 'OnHold') {
+            return 'OnHold';
+        } else if(li.xp.addressType && _.contains(['Funeral', 'Church', 'Cemetary'], li.xp.addressType)){
+            //these orders are typically difficult to fulfill so CSRs need to see them on hold screen right away
+            return 'OnHold';
+        } else {
+            return 'New';
+        }
+    }
+
+    function formatDate(datetime){
+        if(datetime){
+            var date = new Date(datetime);
+            return (date.getFullYear() +'/'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
+        } else {
+            return 'N/A';
+        }
+    }
+
+    function printStatus(li){
+        if( (li.xp.DeliveryMethod === 'LocalDelivery') || ( li.xp.DeliveryMethod === 'InStorePickup' && li.xp.ProductFromStore === 'OtherStore')) {
+            return 'NotPrinted';
+        } else {
+            return 'NotNeeded';
+        }
+    }
+
+    function deliveryMethod(li){
+        if(li.xp && li.xp.Destination && _.contains(['F', 'T'], li.xp.Destination)) {
+            return li.xp.Destination === 'F' ? 'FTD' : 'TFE';
+        } else {
+            return li.xp.DeliveryMethod;
+        }
+    }
+
+    function add(){
+        //adds currency safely by avoiding floating point math
+        return _.reduce(arguments, function(a, b){
+            return ((a * 100) + (b * 100)) / 100;
+        }, 0);
+    }
+
     return service;
 }
 
 bachWiredOrdersService.$inject = ['$q'];angular.module('bachmans-common')
-    .factory('bachWiredOrders', bachWiredOrdersService)
-;
+    .factory('bachWiredOrders', bachWiredOrdersService);
 
-function bachWiredOrdersService($q){
+function bachWiredOrdersService($q) {
     var service = {
-        DetermineEithers: _determineEithers  
+        DetermineEithers: _determineEithers
     };
 
-    function _determineEithers(shipment, buyerxp){
-        //renewDestinations(shipment);
-        var groupedByDestination = _.groupBy(shipment, function(li){
+    function _determineEithers(shipment, buyerxp) {
+        // E's - line items that can be shipped to either TFE or FTD (defined on li.xp.Destination = E)
+        // T's - line items that can only be shipped to TFE (defined on li.xp.Destination = T)
+        // F's - line items that can only be shipped to FTD (defined on li.xp.Destination = F)
+
+        var lineitems = _getDestinations(shipment);
+        var destinationGroup = _.groupBy(lineitems, function(li) {
             return li.xp.Destination;
         });
 
-        if(groupedByDestination['E'] && groupedByDestination['E'].length > 0){
+        //if there are any E's in shipment then run algorithm
+        if (destinationGroup['E'] && destinationGroup['E'].length > 0) {
 
-            var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
-            var tfe = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'Teleflora.com'});
-            ftd.type = 'FTD'; //TODO: get rid of these potentially by storing on docdb instead, maybe not though idk
-            tfe.type = 'TFE';
-    
-            var nonEDestinations = _.without(_.keys(groupedByDestination), 'E');
+            var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
+                Name: 'FTD.com'
+            });
+            var tfe = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
+                Name: 'Teleflora.com'
+            });
+            ftd.type = 'F';
+            tfe.type = 'T';
+
+            var nonEDestinations = _.without(_.keys(destinationGroup), 'E');
             var destination;
 
-            if(nonEDestinations.length === 0){
+            if (nonEDestinations.length === 0) {
+                //all line items in this shipment are E's
+                //determine where the ENTIRE shipment should go (either F or T)
                 destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
                 return setDestination(shipment, destination);
 
-            } else if(nonEDestinations.length === 1){
+            } else if (nonEDestinations.length === 1) {
+                //there is only one type (either F or T) in this shipment
+                //set all E's to that type
                 destination = nonEDestinations[0];
                 return setDestination(shipment, destination);
 
             } else {
-                var preferredDestination = ftd.OrderPercentage > tfe.OrderPercentage ? ftd : tfe;
-                var otherDestination = preferredDestination.type === 'FTD' ? tfe : ftd;
-                
-                var eitherTotal = getLineTotalSum(groupedByDestination['E']);
-                var preferredTotal = getLineTotalSum(groupedByDestination[preferredDestination.type]);
-                var otherTotal = getLineTotalSum(groupedByDestination[otherDestination.type]);
+                //there are both F and T types in this shipment
+                //figure out how many E's to send in each shipment
 
-                if(eitherTotal + preferredTotal  >= preferredDestination.MinOrderPrice.Price){
-                    return satisfyRequirements(groupedByDestination['E'], preferredTotal, preferredDestination)
-                        .then(function(remainingEithers){
+                var preferredDestination = ftd.OrderPercentage > tfe.OrderPercentage ? ftd : tfe; //give preference to network with higher order percentage
+                var otherDestination = preferredDestination.type === 'F' ? tfe : ftd;
+
+                var eitherTotal = getLineTotalSum(destinationGroup['E']);
+                var preferredTotal = getLineTotalSum(destinationGroup[preferredDestination.type]);
+                var otherTotal = getLineTotalSum(destinationGroup[otherDestination.type]);
+
+                // find least amount of E's to meet preferred's min requirements
+                // send the rest to other
+                if (eitherTotal + preferredTotal >= preferredDestination.MinOrderPrice.Price) {
+                    return satisfyRequirements(destinationGroup['E'], preferredTotal, preferredDestination)
+                        .then(function(remainingEithers) {
                             var remainingEithersTotal = getLineTotalSum(remainingEithers);
-                            if(remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
+                            if (remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice.Price) {
                                 return satisfyRequirements(remainingEithers, otherTotal, otherDestination)
-                                    .then(function(lastEithers){
-                                        _.each(lastEithers, function(li){
+                                    .then(function(lastEithers) {
+                                        //both requirements have been satisfied
+                                        //split up the remainder based on order percentages
+                                        _.each(lastEithers, function(li) {
                                             destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
                                             return setDestination([li], destination);
                                         });
@@ -427,85 +565,81 @@ function bachWiredOrdersService($q){
                             }
                         });
 
+                } else if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
+                    //preferred network's requirements can't be met
+                    //find least amount of E's to meet other's min reqs
+                    //send the rest to preferred
+
+                    return satisfyRequirements(destinationGroup['E'], otherTotal, otherDestination)
+                        .then(function(remainingEithers){
+                            if(remainingEithers){
+                                destination = otherDestination.type;
+                                return setDestination(remainingEithers, destination);
+                            }
+                        });
                 } else {
-                    if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
-                        destination = otherDestination.type;
-                        return setDestination(groupedByDestination['E'], otherDestination.type);
-                    } else {
-                        destination = preferredDestination.type;
-                        return setDestination(groupedByDestination['E'], preferredDestination.type);
-                    }
+                    //neither requirements can be met
+                    //split up E's based on order percentages
+
+                    destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
+                    return setDestination(destinationGroup['E'], preferredDestination.type);
                 }
             }
         }
     }
 
-    function renewDestinations(lineitems){
-        _.each(lineitems, function(line){
+    function _getDestinations(lineitems) {
+        lineitems = angular.copy(lineitems);
+        _.each(lineitems, function(line) {
             var codeB4s = ['F', 'T', 'E'];
             if (codeB4s.indexOf(line.Product.xp['CodeB4']) > -1 && line.Product.xp['CodeB2'] === 'Y' && line.xp.DeliveryMethod !== 'LocalDelivery') {
                 line.xp.deliveryCharges = 0;
                 if (line.Product.xp['CodeB4'] === 'F') line.xp.Destination = 'FTD';
                 if (line.Product.xp['CodeB4'] === 'T') line.xp.Destination = 'TFE';
                 if (line.Product.xp['CodeB4'] === 'E') line.xp.Destination = 'E';
-                line.xp.Status = 'OnHold'; //TODO: possibly just move this at shipment level
-                // if (line.Product.xp['CodeB4'] !== 'E') line.xp.Status = 'OnHold';
-    
-                // if (line.xp.Destination === 'FTD') {
-                //     var ftdorders = _.where(BuyerXp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
-                //     line.xp.deliveryFeesDtls = {
-                //         'FTD Service Fees': ftdorders.WiredServiceFees,
-                //         'FTD Delivery Fees': ftdorders.WiredDeliveryFees
-                //     };
-                // }
-    
-                // if (line.xp.Destination === 'TFE') {
-                //     var tfeorders = _.where(BuyerXp.wireOrder.OutgoingOrders, {Name: 'Teleflora.com'});
-                //     line.xp.deliveryFeesDtls = {
-                //         'TFE Service Fees': tfeorders.WiredServiceFees,
-                //         'TFE Delivery Fees': tfeorders.WiredDeliveryFees
-                //     };
-                // }
+                line.xp.Status = 'OnHold'; // any wired orders must be put on hold
+            } else if(line.xp.Destination){
+                delete line.xp.Destination;
             }
         });
+        return lineitems;
     }
 
-    function diceroll(FTDPercentage, TelefloraPercentage){
+    function diceroll(FTDPercentage, TelefloraPercentage) {
         var result;
         var diceroll = Math.random() * 100;
-        if(FTDPercentage && TelefloraPercentage){
-            if(FTDPercentage < TelefloraPercentage){
-                result = (0 <= diceroll && diceroll <= FTDPercentage) ? 'FTD' : 'TFE';
+        if (FTDPercentage && TelefloraPercentage) {
+            if (FTDPercentage < TelefloraPercentage) {
+                result = (0 <= diceroll && diceroll <= FTDPercentage) ? 'F' : 'T';
             } else {
-                result = (0 <= diceroll && diceroll <= TelefloraPercentage) ? 'TFE' : 'FTD';
+                result = (0 <= diceroll && diceroll <= TelefloraPercentage) ? 'T' : 'F';
             }
-        } else if(!FTDPercentage && TelefloraPercentage){
-            result = 'TFE';
-        } else if(!TelefloraPercentage && FTDPercentage){
-            result = 'FTD';
+        } else if (!FTDPercentage && TelefloraPercentage) {
+            result = 'T';
+        } else if (!TelefloraPercentage && FTDPercentage) {
+            result = 'F';
         } else {
-            result = diceroll > 50 ? 'FTD' : 'TFE';
+            result = diceroll > 50 ? 'F' : 'T';
         }
-
         return result;
     }
 
-    function setDestination(shipment, type){
-        _.each(shipment, function(li){
+    function setDestination(shipment, type) {
+        _.each(shipment, function(li) {
             li.xp.Destination = type;
         });
     }
 
-    function getLineTotalSum(lineitems){
+    function getLineTotalSum(lineitems) {
         var lineTotal = _.pluck(lineitems, 'LineTotal');
-        return _.reduce(lineTotal, function(a, b){
+        return _.reduce(lineTotal, function(a, b) {
             return a + b;
         }, 0);
     }
 
-    function satisfyRequirements(lineitems, currentTotal, destination){
+    function satisfyRequirements(lineitems, currentTotal, destination) {
         //uses the least amount of eithers to satisfy requirements
-        if(currentTotal >= destination.MinOrderPrice.Price){
+        if (currentTotal >= destination.MinOrderPrice.Price) {
             return $q.when(lineitems);
         } else {
             var add = lineitems.shift();
@@ -516,55 +650,4 @@ function bachWiredOrdersService($q){
     }
 
     return service;
-}
-
-OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
-    .config(OrderCloudSDKBuyerXP);
-
-
-function OrderCloudSDKBuyerXP($provide){
-    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
-        $delegate.Buyers.Get = function(){
-            var token = $delegate.GetToken();
-            return bachBuyerXp.Get(token);
-        };
-
-        $delegate.Buyers.List = function(){
-            return $delegate.Buyers.Get()
-                .then(function(buyerxp){
-                    return {
-                        Items: [buyerxp], 
-                        Meta: {
-                            Page: 1, 
-                            PageSize: 1, 
-                            TotalPages: 1, 
-                            TotalCount: 1, 
-                            ItemRange: [1, 1]
-                        }
-                    };
-                });
-        };
-
-        $delegate.Buyers.Update = function(){
-            var update = [].slice.call(arguments)[1]; //update obj is second argument
-            var token = $delegate.GetToken();
-            if(update && update.xp) {
-                return bachBuyerXp.Update(token, update.xp);
-            } else {
-                return $q.reject('Missing body');
-            }
-        };
-
-        $delegate.Buyers.Patch = function(){
-            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
-            var token = $delegate.GetToken();
-            if(patch) {
-                return bachBuyerXp.Patch(token, patch);
-            } else {
-                return $q.reject('Missing body');
-            }
-        };
-
-        return $delegate;
-    }]);
 }

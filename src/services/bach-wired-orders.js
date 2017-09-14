@@ -1,52 +1,71 @@
 angular.module('bachmans-common')
-    .factory('bachWiredOrders', bachWiredOrdersService)
-;
+    .factory('bachWiredOrders', bachWiredOrdersService);
 
-function bachWiredOrdersService($q){
+function bachWiredOrdersService($q) {
     var service = {
-        DetermineEithers: _determineEithers  
+        DetermineEithers: _determineEithers
     };
 
-    function _determineEithers(shipment, buyerxp){
-        //renewDestinations(shipment);
-        var groupedByDestination = _.groupBy(shipment, function(li){
+    function _determineEithers(shipment, buyerxp) {
+        // E's - line items that can be shipped to either TFE or FTD (defined on li.xp.Destination = E)
+        // T's - line items that can only be shipped to TFE (defined on li.xp.Destination = T)
+        // F's - line items that can only be shipped to FTD (defined on li.xp.Destination = F)
+
+        var lineitems = _getDestinations(shipment);
+        var destinationGroup = _.groupBy(lineitems, function(li) {
             return li.xp.Destination;
         });
 
-        if(groupedByDestination['E'] && groupedByDestination['E'].length > 0){
+        //if there are any E's in shipment then run algorithm
+        if (destinationGroup['E'] && destinationGroup['E'].length > 0) {
 
-            var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
-            var tfe = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'Teleflora.com'});
-            ftd.type = 'FTD'; //TODO: get rid of these potentially by storing on docdb instead, maybe not though idk
-            tfe.type = 'TFE';
-    
-            var nonEDestinations = _.without(_.keys(groupedByDestination), 'E');
+            var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
+                Name: 'FTD.com'
+            });
+            var tfe = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
+                Name: 'Teleflora.com'
+            });
+            ftd.type = 'F';
+            tfe.type = 'T';
+
+            var nonEDestinations = _.without(_.keys(destinationGroup), 'E');
             var destination;
 
-            if(nonEDestinations.length === 0){
+            if (nonEDestinations.length === 0) {
+                //all line items in this shipment are E's
+                //determine where the ENTIRE shipment should go (either F or T)
                 destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
                 return setDestination(shipment, destination);
 
-            } else if(nonEDestinations.length === 1){
+            } else if (nonEDestinations.length === 1) {
+                //there is only one type (either F or T) in this shipment
+                //set all E's to that type
                 destination = nonEDestinations[0];
                 return setDestination(shipment, destination);
 
             } else {
-                var preferredDestination = ftd.OrderPercentage > tfe.OrderPercentage ? ftd : tfe;
-                var otherDestination = preferredDestination.type === 'FTD' ? tfe : ftd;
-                
-                var eitherTotal = getLineTotalSum(groupedByDestination['E']);
-                var preferredTotal = getLineTotalSum(groupedByDestination[preferredDestination.type]);
-                var otherTotal = getLineTotalSum(groupedByDestination[otherDestination.type]);
+                //there are both F and T types in this shipment
+                //figure out how many E's to send in each shipment
 
-                if(eitherTotal + preferredTotal  >= preferredDestination.MinOrderPrice.Price){
-                    return satisfyRequirements(groupedByDestination['E'], preferredTotal, preferredDestination)
-                        .then(function(remainingEithers){
+                var preferredDestination = ftd.OrderPercentage > tfe.OrderPercentage ? ftd : tfe; //give preference to network with higher order percentage
+                var otherDestination = preferredDestination.type === 'F' ? tfe : ftd;
+
+                var eitherTotal = getLineTotalSum(destinationGroup['E']);
+                var preferredTotal = getLineTotalSum(destinationGroup[preferredDestination.type]);
+                var otherTotal = getLineTotalSum(destinationGroup[otherDestination.type]);
+
+                // find least amount of E's to meet preferred's min requirements
+                // send the rest to other
+                if (eitherTotal + preferredTotal >= preferredDestination.MinOrderPrice.Price) {
+                    return satisfyRequirements(destinationGroup['E'], preferredTotal, preferredDestination)
+                        .then(function(remainingEithers) {
                             var remainingEithersTotal = getLineTotalSum(remainingEithers);
-                            if(remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
+                            if (remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice.Price) {
                                 return satisfyRequirements(remainingEithers, otherTotal, otherDestination)
-                                    .then(function(lastEithers){
-                                        _.each(lastEithers, function(li){
+                                    .then(function(lastEithers) {
+                                        //both requirements have been satisfied
+                                        //split up the remainder based on order percentages
+                                        _.each(lastEithers, function(li) {
                                             destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
                                             return setDestination([li], destination);
                                         });
@@ -57,85 +76,81 @@ function bachWiredOrdersService($q){
                             }
                         });
 
+                } else if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
+                    //preferred network's requirements can't be met
+                    //find least amount of E's to meet other's min reqs
+                    //send the rest to preferred
+
+                    return satisfyRequirements(destinationGroup['E'], otherTotal, otherDestination)
+                        .then(function(remainingEithers){
+                            if(remainingEithers){
+                                destination = otherDestination.type;
+                                return setDestination(remainingEithers, destination);
+                            }
+                        });
                 } else {
-                    if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
-                        destination = otherDestination.type;
-                        return setDestination(groupedByDestination['E'], otherDestination.type);
-                    } else {
-                        destination = preferredDestination.type;
-                        return setDestination(groupedByDestination['E'], preferredDestination.type);
-                    }
+                    //neither requirements can be met
+                    //split up E's based on order percentages
+
+                    destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
+                    return setDestination(destinationGroup['E'], preferredDestination.type);
                 }
             }
         }
     }
 
-    function renewDestinations(lineitems){
-        _.each(lineitems, function(line){
+    function _getDestinations(lineitems) {
+        lineitems = angular.copy(lineitems);
+        _.each(lineitems, function(line) {
             var codeB4s = ['F', 'T', 'E'];
             if (codeB4s.indexOf(line.Product.xp['CodeB4']) > -1 && line.Product.xp['CodeB2'] === 'Y' && line.xp.DeliveryMethod !== 'LocalDelivery') {
                 line.xp.deliveryCharges = 0;
                 if (line.Product.xp['CodeB4'] === 'F') line.xp.Destination = 'FTD';
                 if (line.Product.xp['CodeB4'] === 'T') line.xp.Destination = 'TFE';
                 if (line.Product.xp['CodeB4'] === 'E') line.xp.Destination = 'E';
-                line.xp.Status = 'OnHold'; //TODO: possibly just move this at shipment level
-                // if (line.Product.xp['CodeB4'] !== 'E') line.xp.Status = 'OnHold';
-    
-                // if (line.xp.Destination === 'FTD') {
-                //     var ftdorders = _.where(BuyerXp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
-                //     line.xp.deliveryFeesDtls = {
-                //         'FTD Service Fees': ftdorders.WiredServiceFees,
-                //         'FTD Delivery Fees': ftdorders.WiredDeliveryFees
-                //     };
-                // }
-    
-                // if (line.xp.Destination === 'TFE') {
-                //     var tfeorders = _.where(BuyerXp.wireOrder.OutgoingOrders, {Name: 'Teleflora.com'});
-                //     line.xp.deliveryFeesDtls = {
-                //         'TFE Service Fees': tfeorders.WiredServiceFees,
-                //         'TFE Delivery Fees': tfeorders.WiredDeliveryFees
-                //     };
-                // }
+                line.xp.Status = 'OnHold'; // any wired orders must be put on hold
+            } else if(line.xp.Destination){
+                delete line.xp.Destination;
             }
         });
+        return lineitems;
     }
 
-    function diceroll(FTDPercentage, TelefloraPercentage){
+    function diceroll(FTDPercentage, TelefloraPercentage) {
         var result;
         var diceroll = Math.random() * 100;
-        if(FTDPercentage && TelefloraPercentage){
-            if(FTDPercentage < TelefloraPercentage){
-                result = (0 <= diceroll && diceroll <= FTDPercentage) ? 'FTD' : 'TFE';
+        if (FTDPercentage && TelefloraPercentage) {
+            if (FTDPercentage < TelefloraPercentage) {
+                result = (0 <= diceroll && diceroll <= FTDPercentage) ? 'F' : 'T';
             } else {
-                result = (0 <= diceroll && diceroll <= TelefloraPercentage) ? 'TFE' : 'FTD';
+                result = (0 <= diceroll && diceroll <= TelefloraPercentage) ? 'T' : 'F';
             }
-        } else if(!FTDPercentage && TelefloraPercentage){
-            result = 'TFE';
-        } else if(!TelefloraPercentage && FTDPercentage){
-            result = 'FTD';
+        } else if (!FTDPercentage && TelefloraPercentage) {
+            result = 'T';
+        } else if (!TelefloraPercentage && FTDPercentage) {
+            result = 'F';
         } else {
-            result = diceroll > 50 ? 'FTD' : 'TFE';
+            result = diceroll > 50 ? 'F' : 'T';
         }
-
         return result;
     }
 
-    function setDestination(shipment, type){
-        _.each(shipment, function(li){
+    function setDestination(shipment, type) {
+        _.each(shipment, function(li) {
             li.xp.Destination = type;
         });
     }
 
-    function getLineTotalSum(lineitems){
+    function getLineTotalSum(lineitems) {
         var lineTotal = _.pluck(lineitems, 'LineTotal');
-        return _.reduce(lineTotal, function(a, b){
+        return _.reduce(lineTotal, function(a, b) {
             return a + b;
         }, 0);
     }
 
-    function satisfyRequirements(lineitems, currentTotal, destination){
+    function satisfyRequirements(lineitems, currentTotal, destination) {
         //uses the least amount of eithers to satisfy requirements
-        if(currentTotal >= destination.MinOrderPrice.Price){
+        if (currentTotal >= destination.MinOrderPrice.Price) {
             return $q.when(lineitems);
         } else {
             var add = lineitems.shift();
