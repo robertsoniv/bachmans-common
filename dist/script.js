@@ -2,127 +2,6 @@ angular.module('bachmans-common', [
 
 ]);
 
-OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
-    .config(OrderCloudSDKBuyerXP);
-
-
-function OrderCloudSDKBuyerXP($provide){
-    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
-        $delegate.Buyers.Get = function(){
-            var token = $delegate.GetToken();
-            return bachBuyerXp.Get(token);
-        };
-
-        $delegate.Buyers.List = function(){
-            return $delegate.Buyers.Get()
-                .then(function(buyerxp){
-                    return {
-                        Items: [buyerxp], 
-                        Meta: {
-                            Page: 1, 
-                            PageSize: 1, 
-                            TotalPages: 1, 
-                            TotalCount: 1, 
-                            ItemRange: [1, 1]
-                        }
-                    };
-                });
-        };
-
-        $delegate.Buyers.Update = function(){
-            var update = [].slice.call(arguments)[1]; //update obj is second argument
-            var token = $delegate.GetToken();
-            if(update && update.xp) {
-                return bachBuyerXp.Update(token, update.xp);
-            } else {
-                return $q.reject('Missing body');
-            }
-        };
-
-        $delegate.Buyers.Patch = function(){
-            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
-            var token = $delegate.GetToken();
-            if(patch) {
-                return bachBuyerXp.Patch(token, patch);
-            } else {
-                return $q.reject('Missing body');
-            }
-        };
-
-        return $delegate;
-    }]);
-}
-
-lineItemThrottleDecorator.$inject = ['$provide'];angular.module('bachmans-common')
-    .config(lineItemThrottleDecorator)
-;
-
-//TODO: this is a temprorary solution to the performance issues described in BAC-778
-// Line item list calls will only actually call the API if they are at least 2 seconds apart
-// Any calls made closer together than two seconds will share the same response
-function lineItemThrottleDecorator($provide) {
-    $provide.decorator('OrderCloudSDK', ['$delegate', '$q', '$timeout', function($delegate, $q, $timeout) {
-        var originalLineItemList = $delegate.LineItems.List;
-        var currentResponse, isError = false, running = false, cacheResponse = false;
-
-        function newLineItemsList() {
-            var df = $q.defer();
-
-            if (running) {
-                checkRunning();
-            } else if (cacheResponse) {
-                complete();
-            } else {
-                //No list call is currently cached or running so send a new request
-                running = true;
-                originalLineItemList.apply($delegate, arguments)
-                    .then(function(listResponse) {
-                        currentResponse = listResponse;
-                        isError = false;
-                        stopRunning();
-                        complete();
-                    })
-                    .catch(function(ex) {
-                        isError = true;
-                        stopRunning();
-                        complete();
-                    });
-            }
-
-            function stopRunning() {
-                $timeout(function() {
-                    cacheResponse = true;
-                    newCacheTimer();
-                    running = false;
-                }, 100);
-            }
-
-            function newCacheTimer() {
-                //Cache the response for 2 seconds
-                $timeout(function() {
-                    cacheResponse = false;
-                }, 2000);
-            }
-
-            function checkRunning() {
-                //Wait for the first request to complete and return it's result
-                $timeout(function() {
-                    running ? checkRunning() : complete();
-                }, 100);
-            }
-
-            function complete() {
-                isError ? df.reject(currentResponse) : df.resolve(currentResponse);
-            }
-
-            return df.promise;
-        }
-
-        $delegate.LineItems.List = newLineItemsList;
-        return $delegate;
-    }]);
-}
-
 bachAssignments.$inject = ['nodeapiurl', '$resource', 'OrderCloudSDK'];angular.module('bachmans-common')
     .factory('bachAssignments', bachAssignments);
 
@@ -445,7 +324,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     }
 
     function _create(lineitems, order){
-        var shipments = _groupAndPatchLIs(lineitems);
+        var shipments = _groupAndPatchLIs(lineitems, order.ID);
 
         var shipmentsQueue = [];
         _.each(shipments, function(shipment, index){
@@ -480,6 +359,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
                     'SenderName': isAnon ? order.BillingAddress.FirstName + ' ' + order.BillingAddress.LastName : order.Fromuser.FirstName + ' ' + order.FromUser.LastName,
                     'FromUserID': order.FromUserID,
+                    'CardMessage': cardMessage(shipment),
                     'CSRID': order.xp.CSRID || 'Web', //will be populated if placed on OMS
                     'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
                     'DeliveryCharges': shipment.DeliveryCharges,
@@ -568,6 +448,16 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         } else {
             return 'N/A';
         }
+    }
+
+    function cardMessage(shipment){
+        var message = '';
+        _.each(shipment, function(li){
+            if(li.CardMessage && li.CardMessage.length && li.CardMessage.length > message){
+                message = li.CardMessage;
+            }
+        });
+        return message || null;
     }
 
     function printStatus(li){
@@ -758,4 +648,125 @@ function bachWiredOrdersService($q) {
     }
 
     return service;
+}
+
+OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
+    .config(OrderCloudSDKBuyerXP);
+
+
+function OrderCloudSDKBuyerXP($provide){
+    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
+        $delegate.Buyers.Get = function(){
+            var token = $delegate.GetToken();
+            return bachBuyerXp.Get(token);
+        };
+
+        $delegate.Buyers.List = function(){
+            return $delegate.Buyers.Get()
+                .then(function(buyerxp){
+                    return {
+                        Items: [buyerxp], 
+                        Meta: {
+                            Page: 1, 
+                            PageSize: 1, 
+                            TotalPages: 1, 
+                            TotalCount: 1, 
+                            ItemRange: [1, 1]
+                        }
+                    };
+                });
+        };
+
+        $delegate.Buyers.Update = function(){
+            var update = [].slice.call(arguments)[1]; //update obj is second argument
+            var token = $delegate.GetToken();
+            if(update && update.xp) {
+                return bachBuyerXp.Update(token, update.xp);
+            } else {
+                return $q.reject('Missing body');
+            }
+        };
+
+        $delegate.Buyers.Patch = function(){
+            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
+            var token = $delegate.GetToken();
+            if(patch) {
+                return bachBuyerXp.Patch(token, patch);
+            } else {
+                return $q.reject('Missing body');
+            }
+        };
+
+        return $delegate;
+    }]);
+}
+
+lineItemThrottleDecorator.$inject = ['$provide'];angular.module('bachmans-common')
+    .config(lineItemThrottleDecorator)
+;
+
+//TODO: this is a temprorary solution to the performance issues described in BAC-778
+// Line item list calls will only actually call the API if they are at least 2 seconds apart
+// Any calls made closer together than two seconds will share the same response
+function lineItemThrottleDecorator($provide) {
+    $provide.decorator('OrderCloudSDK', ['$delegate', '$q', '$timeout', function($delegate, $q, $timeout) {
+        var originalLineItemList = $delegate.LineItems.List;
+        var currentResponse, isError = false, running = false, cacheResponse = false;
+
+        function newLineItemsList() {
+            var df = $q.defer();
+
+            if (running) {
+                checkRunning();
+            } else if (cacheResponse) {
+                complete();
+            } else {
+                //No list call is currently cached or running so send a new request
+                running = true;
+                originalLineItemList.apply($delegate, arguments)
+                    .then(function(listResponse) {
+                        currentResponse = listResponse;
+                        isError = false;
+                        stopRunning();
+                        complete();
+                    })
+                    .catch(function(ex) {
+                        isError = true;
+                        stopRunning();
+                        complete();
+                    });
+            }
+
+            function stopRunning() {
+                $timeout(function() {
+                    cacheResponse = true;
+                    newCacheTimer();
+                    running = false;
+                }, 100);
+            }
+
+            function newCacheTimer() {
+                //Cache the response for 2 seconds
+                $timeout(function() {
+                    cacheResponse = false;
+                }, 2000);
+            }
+
+            function checkRunning() {
+                //Wait for the first request to complete and return it's result
+                $timeout(function() {
+                    running ? checkRunning() : complete();
+                }, 100);
+            }
+
+            function complete() {
+                isError ? df.reject(currentResponse) : df.resolve(currentResponse);
+            }
+
+            return df.promise;
+        }
+
+        $delegate.LineItems.List = newLineItemsList;
+        return $delegate;
+    }]);
 }

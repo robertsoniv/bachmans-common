@@ -179,7 +179,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     }
 
     function _create(lineitems, order){
-        var shipments = _groupAndPatchLIs(lineitems);
+        var shipments = _groupAndPatchLIs(lineitems, order.ID);
 
         var shipmentsQueue = [];
         _.each(shipments, function(shipment, index){
@@ -214,6 +214,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
                     'SenderName': isAnon ? order.BillingAddress.FirstName + ' ' + order.BillingAddress.LastName : order.Fromuser.FirstName + ' ' + order.FromUser.LastName,
                     'FromUserID': order.FromUserID,
+                    'CardMessage': cardMessage(shipment),
                     'CSRID': order.xp.CSRID || 'Web', //will be populated if placed on OMS
                     'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
                     'DeliveryCharges': shipment.DeliveryCharges,
@@ -302,6 +303,16 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         } else {
             return 'N/A';
         }
+    }
+
+    function cardMessage(shipment){
+        var message = '';
+        _.each(shipment, function(li){
+            if(li.CardMessage && li.CardMessage.length && li.CardMessage.length > message){
+                message = li.CardMessage;
+            }
+        });
+        return message || null;
     }
 
     function printStatus(li){
