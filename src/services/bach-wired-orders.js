@@ -6,7 +6,7 @@ function bachWiredOrdersService($q) {
         DetermineEithers: _determineEithers
     };
 
-    function _determineEithers(shipment, buyerxp) {
+    function _determineEithers(shipment, wiredOrderSettings) {
         // E's - line items that can be shipped to either TFE or FTD (defined on li.xp.Destination = E)
         // T's - line items that can only be shipped to TFE (defined on li.xp.Destination = T)
         // F's - line items that can only be shipped to FTD (defined on li.xp.Destination = F)
@@ -19,14 +19,13 @@ function bachWiredOrdersService($q) {
         //if there are any E's in shipment then run algorithm
         if (destinationGroup['E'] && destinationGroup['E'].length > 0) {
 
-            var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
+            var ftd = _.findWhere(wiredOrderSettings.Destinations, {
                 Name: 'FTD.com'
             });
-            var tfe = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
+
+            var tfe = _.findWhere(wiredOrderSettings.Destinations, {
                 Name: 'Teleflora.com'
             });
-            ftd.type = 'F';
-            tfe.type = 'T';
 
             var nonEDestinations = _.without(_.keys(destinationGroup), 'E');
             var destination;
@@ -48,19 +47,19 @@ function bachWiredOrdersService($q) {
                 //figure out how many E's to send in each shipment
 
                 var preferredDestination = ftd.OrderPercentage > tfe.OrderPercentage ? ftd : tfe; //give preference to network with higher order percentage
-                var otherDestination = preferredDestination.type === 'F' ? tfe : ftd;
+                var otherDestination = preferredDestination.Type === 'F' ? tfe : ftd;
 
                 var eitherTotal = getLineTotalSum(destinationGroup['E']);
-                var preferredTotal = getLineTotalSum(destinationGroup[preferredDestination.type]);
-                var otherTotal = getLineTotalSum(destinationGroup[otherDestination.type]);
+                var preferredTotal = getLineTotalSum(destinationGroup[preferredDestination.Type]);
+                var otherTotal = getLineTotalSum(destinationGroup[otherDestination.Type]);
 
                 // find least amount of E's to meet preferred's min requirements
                 // send the rest to other
-                if (eitherTotal + preferredTotal >= preferredDestination.MinOrderPrice.Price) {
+                if (eitherTotal + preferredTotal >= preferredDestination.MinOrderPrice) {
                     return satisfyRequirements(destinationGroup['E'], preferredTotal, preferredDestination)
                         .then(function(remainingEithers) {
                             var remainingEithersTotal = getLineTotalSum(remainingEithers);
-                            if (remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice.Price) {
+                            if (remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice) {
                                 return satisfyRequirements(remainingEithers, otherTotal, otherDestination)
                                     .then(function(lastEithers) {
                                         //both requirements have been satisfied
@@ -71,12 +70,12 @@ function bachWiredOrdersService($q) {
                                         });
                                     });
                             } else {
-                                destination = preferredDestination.type;
+                                destination = preferredDestination.Type;
                                 return setDestination(remainingEithers, destination);
                             }
                         });
 
-                } else if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
+                } else if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice){
                     //preferred network's requirements can't be met
                     //find least amount of E's to meet other's min reqs
                     //send the rest to preferred
@@ -84,7 +83,7 @@ function bachWiredOrdersService($q) {
                     return satisfyRequirements(destinationGroup['E'], otherTotal, otherDestination)
                         .then(function(remainingEithers){
                             if(remainingEithers){
-                                destination = otherDestination.type;
+                                destination = otherDestination.Type;
                                 return setDestination(remainingEithers, destination);
                             }
                         });
@@ -93,7 +92,7 @@ function bachWiredOrdersService($q) {
                     //split up E's based on order percentages
 
                     destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
-                    return setDestination(destinationGroup['E'], preferredDestination.type);
+                    return setDestination(destinationGroup['E'], preferredDestination.Type);
                 }
             }
         }
@@ -103,7 +102,7 @@ function bachWiredOrdersService($q) {
         lineitems = angular.copy(lineitems);
         _.each(lineitems, function(line) {
             var codeB4s = ['F', 'T', 'E'];
-            if (codeB4s.indexOf(line.Product.xp['CodeB4']) > -1 && line.Product.xp['CodeB2'] === 'Y' && line.xp.DeliveryMethod !== 'LocalDelivery') {
+            if (_.contains(codeB4s, line.Product.xp.CodeB4) && line.Product.xp.CodeB2 === 'Y' && line.xp.DeliveryMethod !== 'LocalDelivery') {
                 line.xp.deliveryCharges = 0;
                 if (line.Product.xp['CodeB4'] === 'F') line.xp.Destination = 'FTD';
                 if (line.Product.xp['CodeB4'] === 'T') line.xp.Destination = 'TFE';
@@ -150,13 +149,13 @@ function bachWiredOrdersService($q) {
 
     function satisfyRequirements(lineitems, currentTotal, destination) {
         //uses the least amount of eithers to satisfy requirements
-        if (currentTotal >= destination.MinOrderPrice.Price) {
+        if (currentTotal >= destination.MinOrderPrice) {
             return $q.when(lineitems);
         } else {
             var add = lineitems.shift();
             currentTotal += add;
-            setDestination([add], destination.type);
-            return satisfyRequirements(lineitems, currentTotal, destination.MinOrderPrice.Price);
+            setDestination([add], destination.Type);
+            return satisfyRequirements(lineitems, currentTotal, destination.MinOrderPrice);
         }
     }
 
