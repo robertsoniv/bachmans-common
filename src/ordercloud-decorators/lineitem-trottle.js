@@ -59,18 +59,16 @@ function lineItemThrottleDecorator($provide) {
             }
 
             function stopRunning() {
-                $timeout(function() {
-                    cacheResponse = true;
-                    newCacheTimer();
-                    running = false;
-                }, 100);
+                cacheResponse = true;
+                running = false;
+                newCacheTimer();
             }
 
             function newCacheTimer() {
                 //Cache the response for 2 seconds
                 $timeout(function() {
                     cacheResponse = false;
-                }, 2000);
+                }, 3000);
             }
 
             function checkRunning() {
