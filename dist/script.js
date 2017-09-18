@@ -63,7 +63,31 @@ lineItemThrottleDecorator.$inject = ['$provide'];angular.module('bachmans-common
 function lineItemThrottleDecorator($provide) {
     $provide.decorator('OrderCloudSDK', ['$delegate', '$q', '$timeout', function($delegate, $q, $timeout) {
         var originalLineItemList = $delegate.LineItems.List;
+        var originalDelete = $delegate.LineItems.Delete;
+        var originalUpdate = $delegate.LineItems.Update;
+        var originalPatch = $delegate.LineItems.Patch;
+        var originalCreate = $delegate.LineItems.Create;
         var currentResponse, isError = false, running = false, cacheResponse = false;
+
+        function newLineItemsDelete() {
+            cacheResponse = false;
+            return originalDelete.apply($delegate, arguments);
+        }
+
+        function newLineItemsUpdate() {
+            cacheResponse = false;
+            return originalUpdate.apply($delegate, arguments);
+        }
+
+        function newLineItemsPatch() {
+            cacheResponse = false;
+            return originalPatch.apply($delegate, arguments);
+        }
+
+        function newLineItemsCreate() {
+            cacheResponse = false;
+            return originalCreate.apply($delegate, arguments);
+        }
 
         function newLineItemsList() {
             var df = $q.defer();
@@ -119,6 +143,10 @@ function lineItemThrottleDecorator($provide) {
         }
 
         $delegate.LineItems.List = newLineItemsList;
+        $delegate.LineItems.Delete = newLineItemsDelete;
+        $delegate.LineItems.Update = newLineItemsUpdate;
+        $delegate.LineItems.Patch = newLineItemsPatch;
+        $delegate.LineItems.Create = newLineItemsCreate;
         return $delegate;
     }]);
 }
