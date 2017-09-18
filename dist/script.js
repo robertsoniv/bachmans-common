@@ -264,13 +264,15 @@ function bachGiftCards(nodeapiurl, $resource, toastr, $http, OrderCloudSDK){
     return service;
 }
 
-bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK', 'bachWiredOrders', 'bachBuyerXp', '$resource', 'nodeapiurl'];angular.module('bachmans-common')
+bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK', 'bachWiredOrders', 'bachBuyerXp', '$resource', 'nodeapiurl', 'appname'];angular.module('bachmans-common')
     .factory('bachShipments', bachShipmentsService)
 ;
 
-function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachBuyerXp, $resource, nodeapiurl){
+function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachBuyerXp, $resource, nodeapiurl, appname){
+    var isSF = appname === 'BachmanStoreFront';
     var service = {
         Group: _group,
+        GroupAndPatchLIs: _groupAndPatchLIs, //patches li.xp.Destination and li.xp.deliveryFeesDtls
         Create: _create,
         List: _list
     };
@@ -342,34 +344,58 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     function splitWiredOrders(shipments){
         var splitShipments = [];
         _.each(shipments, function(shipment){
-            var buyerxp = bachBuyerXp.GetCache().xp;
-            bachWiredOrders.DetermineEithers(shipment, buyerxp); //sets F or T for all li.xp.Destination
+            var wiredOrderSettings = bachBuyerXp.GetCache().xp.wireOrder.OutgoingOrders;
+            bachWiredOrders.DetermineEithers(shipment, wiredOrderSettings); //sets F or T for all li.xp.Destination
             
             var grouped = _.groupBy(shipment, function(li){
                 return li.xp.Destination;
             });
-            _.each(grouped, function(group){
+            _.each(grouped, function(group, destination){
+                var isWiredShipment = destination === 'F' || destination === 'T';
+                if(isWiredShipment){
+                    _.each(group, function(li){
+                        
+                        _.each(li.xp.deliveryFeesDtls, function(charge, type){
+                            var standardDeliveryCharges = [
+                                'LocalDelivery', 
+                                'Standard Delivery', 
+                                'InStorePickUp', 
+                                'Courier', 
+                                'USPS',
+                                'UPS Charges', 
+                                'Event'
+                            ];
+                            if(_.contains(standardDeliveryCharges, type)){
+                                //wired line items should not have standard delivery charges
+                                li.xp.deliveryFeesDtls[type] = 0; //set to 0 so we can avoid update and use patch
+                            }
+                                //clear any previous charges
+                            if(_.contains(['Wired Delivery Charges'], ['Wired Service Charges'])){
+                                li.xp.deliveryFeesDtls[type] = 0;
+                            }
+                        });
+
+                        //put wired order charges on only the first line item in a shipment
+                        if(!shipment[0].xp.deliveryFeesDtls) shipment[0].xp.deliveryFeesDtls = {};
+                        shipment[0].xp.deliveryFeesDtls['Wired Delivery Charges'] = Number(wiredOrderSettings.WiredDeliveryFees);
+                        shipment[0].xp.deliveryFeesDtls['Wired Service Charges'] = Number(wiredOrderSettings.WiredServiceFees);
+                    });
+                }
                 splitShipments.push(group);
             });
         });
         return shipmentTotals(splitShipments);
     }
 
-
     function shipmentTotals(shipments){
-        var buyerxp = bachBuyerXp.GetCache().xp;
-        var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {Name: 'FTD.com'});
         _.each(shipments, function(shipment){
             shipment.Cost = 0;
             shipment.Tax = 0;
-            shipment.WiredServiceFees = 0;
-            shipment.WiredDeliveryFees = 0;
-            shipment.DeliveryCharges = 0;
             shipment.deliveryFeesDtls = {}; //cumulative unique delivery fees details object
 
-            var standardDeliveryCharges = 0; //charges for LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
-            var wiredOrderCost = 0; //charges for TFE/FTD
-            var nonDeliveryCharges = 0; //charges for Assembly, Placement etc.
+            var standardDeliveryCharges = 0;
+            var wiredCharges = 0;
+            var nonDeliveryCharges = 0;
 
             _.each(shipment, function(li){
                 if(li.xp) {
@@ -379,11 +405,16 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                 }
 
                 _.each(li.xp.deliveryFeesDtls, function(charge, type){
-                    if(_.contains(['LocalDelivery', 'Standard Delivery', 'InStorePickUp', 'Courier', 'USPS', 'UPS', 'UPS Charges', 'Event'], type)){
+
+                    if(_.contains(['LocalDelivery', 'Standard Delivery', 'InStorePickUp', 'Courier', 'USPS', 'UPS Charges', 'Event'], type)){
                         standardDeliveryCharges = add(standardDeliveryCharges, charge);
+                    } else if(_.contains(['Wired Delivery Charges', 'Wired Service Charges'], type)){
+                        wiredCharges = add(wiredCharges, charge);
                     } else {
                         nonDeliveryCharges = add(nonDeliveryCharges, charge);
                     }
+
+                    //build up shipment level deliveryFeesDtls object
                     if(!shipment.deliveryFeesDtls[type]){
                         //fee type doesn't exist - create it and set it to first val
                         shipment.deliveryFeesDtls[type] = charge;
@@ -393,25 +424,28 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     }
                 });
             });
-            if(shipment[0].xp.Destination && _.contains(['F', 'T'], shipment[0].xp.Destination) ){
-                //TODO: per chris there will only be one fee for BOTH wired order types
-                //so we can clean up the data model a bit - maybe store on buyerxp.wireOrder.OutgoingOrders[ServiceFee and DeliveryFee]
-                shipment.WiredServiceFees = add(ftd.WiredServiceFees, shipment.WiredServiceFees);
-                shipment.WiredDeliveryFees = add(ftd.WiredDeliveryFees, shipment.WiredDeliveryFees);
-            }
-
-            wiredOrderCost = shipment.WiredServiceFees + shipment.WiredDeliveryFees;
 
             //only either wired delivery charges OR standard delivery charges should apply - never both
-            shipment.DeliveryCharges = nonDeliveryCharges + (wiredOrderCost || standardDeliveryCharges); 
-
+            shipment.DeliveryCharges = nonDeliveryCharges + (wiredCharges || standardDeliveryCharges); 
             shipment.Total = add(shipment.Cost, shipment.Tax, shipment.DeliveryCharges);
         });
         return shipments;
     }
 
-    function _create(lineitems, order, buyerxp){
-        var shipments = _group(lineitems, buyerxp);
+    function _groupAndPatchLIs(lineitemList, orderID){
+        var shipments = _group(lineitemList);
+        var lineitems = _.flatten(shipments);
+        _.each(lineitems, function(li){
+            if(li.xp.Destination === 'F' || li.xp.Destination === 'T'){
+                //this can just lazy-update in the background (don't need return results, just updating on OC)
+                OrderCloudSDK.LineItems.Patch(isSF ? 'outgoing' : 'incoming', orderID, li.ID, {xp: {deliveryFeesDtls: li.xp.deliveryFeesDtls}});
+            }
+        });
+        return shipments;
+    }
+
+    function _create(lineitems, order){
+        var shipments = _groupAndPatchLIs(lineitems);
 
         var shipmentsQueue = [];
         _.each(shipments, function(shipment, index){
@@ -427,6 +461,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
             
             var count = index + 1;
             var li = shipment[0];
+            var isAnon = order.FromUserID === 'anon-template-user';
 
             var shipmentObj = {
                 'BuyerID': buyerid,
@@ -439,9 +474,13 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     'PrintStatus': printStatus(li),
                     'Direction': 'Outgoing', //will always be outgoing if set from app
                     'DeliveryMethod': deliveryMethod(li), //possible values: FTD, TFE, LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
+                    'DateSubmitted': formatDate(order.DateSubmitted),
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
+                    'SenderName': isAnon ? order.BillingAddress.FirstName + ' ' + order.BillingAddress.LastName : order.Fromuser.FirstName + ' ' + order.FromUser.LastName,
+                    'FromUserID': order.FromUserID,
+                    'CSRID': order.xp.CSRID || 'Web', //will be populated if placed on OMS
                     'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
                     'DeliveryCharges': shipment.DeliveryCharges,
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
@@ -525,7 +564,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     function formatDate(datetime){
         if(datetime){
             var date = new Date(datetime);
-            return (date.getFullYear() +'/'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'/'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
+            return (date.getFullYear() +'-'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'-'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
         } else {
             return 'N/A';
         }
@@ -565,7 +604,7 @@ function bachWiredOrdersService($q) {
         DetermineEithers: _determineEithers
     };
 
-    function _determineEithers(shipment, buyerxp) {
+    function _determineEithers(shipment, wiredOrderSettings) {
         // E's - line items that can be shipped to either TFE or FTD (defined on li.xp.Destination = E)
         // T's - line items that can only be shipped to TFE (defined on li.xp.Destination = T)
         // F's - line items that can only be shipped to FTD (defined on li.xp.Destination = F)
@@ -578,14 +617,13 @@ function bachWiredOrdersService($q) {
         //if there are any E's in shipment then run algorithm
         if (destinationGroup['E'] && destinationGroup['E'].length > 0) {
 
-            var ftd = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
+            var ftd = _.findWhere(wiredOrderSettings.Destinations, {
                 Name: 'FTD.com'
             });
-            var tfe = _.findWhere(buyerxp.wireOrder.OutgoingOrders, {
+
+            var tfe = _.findWhere(wiredOrderSettings.Destinations, {
                 Name: 'Teleflora.com'
             });
-            ftd.type = 'F';
-            tfe.type = 'T';
 
             var nonEDestinations = _.without(_.keys(destinationGroup), 'E');
             var destination;
@@ -607,19 +645,19 @@ function bachWiredOrdersService($q) {
                 //figure out how many E's to send in each shipment
 
                 var preferredDestination = ftd.OrderPercentage > tfe.OrderPercentage ? ftd : tfe; //give preference to network with higher order percentage
-                var otherDestination = preferredDestination.type === 'F' ? tfe : ftd;
+                var otherDestination = preferredDestination.Type === 'F' ? tfe : ftd;
 
                 var eitherTotal = getLineTotalSum(destinationGroup['E']);
-                var preferredTotal = getLineTotalSum(destinationGroup[preferredDestination.type]);
-                var otherTotal = getLineTotalSum(destinationGroup[otherDestination.type]);
+                var preferredTotal = getLineTotalSum(destinationGroup[preferredDestination.Type]);
+                var otherTotal = getLineTotalSum(destinationGroup[otherDestination.Type]);
 
                 // find least amount of E's to meet preferred's min requirements
                 // send the rest to other
-                if (eitherTotal + preferredTotal >= preferredDestination.MinOrderPrice.Price) {
+                if (eitherTotal + preferredTotal >= preferredDestination.MinOrderPrice) {
                     return satisfyRequirements(destinationGroup['E'], preferredTotal, preferredDestination)
                         .then(function(remainingEithers) {
                             var remainingEithersTotal = getLineTotalSum(remainingEithers);
-                            if (remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice.Price) {
+                            if (remainingEithersTotal + otherTotal >= otherDestination.MinOrderPrice) {
                                 return satisfyRequirements(remainingEithers, otherTotal, otherDestination)
                                     .then(function(lastEithers) {
                                         //both requirements have been satisfied
@@ -630,12 +668,12 @@ function bachWiredOrdersService($q) {
                                         });
                                     });
                             } else {
-                                destination = preferredDestination.type;
+                                destination = preferredDestination.Type;
                                 return setDestination(remainingEithers, destination);
                             }
                         });
 
-                } else if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice.Price){
+                } else if(eitherTotal + otherTotal >= otherDestination.MinOrderPrice){
                     //preferred network's requirements can't be met
                     //find least amount of E's to meet other's min reqs
                     //send the rest to preferred
@@ -643,7 +681,7 @@ function bachWiredOrdersService($q) {
                     return satisfyRequirements(destinationGroup['E'], otherTotal, otherDestination)
                         .then(function(remainingEithers){
                             if(remainingEithers){
-                                destination = otherDestination.type;
+                                destination = otherDestination.Type;
                                 return setDestination(remainingEithers, destination);
                             }
                         });
@@ -652,7 +690,7 @@ function bachWiredOrdersService($q) {
                     //split up E's based on order percentages
 
                     destination = diceroll(ftd.OrderPercentage, tfe.OrderPercentage);
-                    return setDestination(destinationGroup['E'], preferredDestination.type);
+                    return setDestination(destinationGroup['E'], preferredDestination.Type);
                 }
             }
         }
@@ -662,7 +700,7 @@ function bachWiredOrdersService($q) {
         lineitems = angular.copy(lineitems);
         _.each(lineitems, function(line) {
             var codeB4s = ['F', 'T', 'E'];
-            if (codeB4s.indexOf(line.Product.xp['CodeB4']) > -1 && line.Product.xp['CodeB2'] === 'Y' && line.xp.DeliveryMethod !== 'LocalDelivery') {
+            if (_.contains(codeB4s, line.Product.xp.CodeB4) && line.Product.xp.CodeB2 === 'Y' && line.xp.DeliveryMethod !== 'LocalDelivery') {
                 line.xp.deliveryCharges = 0;
                 if (line.Product.xp['CodeB4'] === 'F') line.xp.Destination = 'FTD';
                 if (line.Product.xp['CodeB4'] === 'T') line.xp.Destination = 'TFE';
@@ -709,13 +747,13 @@ function bachWiredOrdersService($q) {
 
     function satisfyRequirements(lineitems, currentTotal, destination) {
         //uses the least amount of eithers to satisfy requirements
-        if (currentTotal >= destination.MinOrderPrice.Price) {
+        if (currentTotal >= destination.MinOrderPrice) {
             return $q.when(lineitems);
         } else {
             var add = lineitems.shift();
             currentTotal += add;
-            setDestination([add], destination.type);
-            return satisfyRequirements(lineitems, currentTotal, destination.MinOrderPrice.Price);
+            setDestination([add], destination.Type);
+            return satisfyRequirements(lineitems, currentTotal, destination.MinOrderPrice);
         }
     }
 
