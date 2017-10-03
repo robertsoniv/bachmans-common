@@ -512,18 +512,18 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress ? li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName : 'N/A',
-                    'SenderName': sender(order),
+                    'Sender': sender(order),
                     'FromUserID': order.FromUserID,
                     'CardMessage': cardMessage(shipment),
                     'CSRID': order.xp.CSRID || 'Web', //id of csr order was placed by - only populated if placed in oms app
                     'Tax': shipment.Tax, //cumulative li.xp.Tax
                     'DeliveryCharges': shipment.DeliveryCharges, //see above for calculation
-                    'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets sent to,
+                    'RouteCode': li.xp.RouteCode || 'N/A', //alphanumeric code of the city its going to - determines which staging area product gets sent to,
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress,
                     'StoreNumber': storeNumber(li), //web orders will be set to StoreNumber 3
-                    'HandlingCost': shipment.deliveryFeesDtls['Handling Charges'], //cumulative li.xp.deliveryFeesDtls['Handling Charges']
-                    'DeliveryNote': li.xp.deliveryNote //TODO: once apps have been refactored move this up from li to shipment level
+                    'HandlingCost': shipment.deliveryFeesDtls['Handling Charges'] || 0, //cumulative li.xp.deliveryFeesDtls['Handling Charges']
+                    'DeliveryNote': li.xp.deliveryNote || null //TODO: once apps have been refactored move this up from li to shipment level
                 }
             };
             
