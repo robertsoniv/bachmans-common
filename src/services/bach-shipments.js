@@ -212,7 +212,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress ? li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName : 'N/A',
-                    'SenderName': sender(order),
+                    'Sender': sender(order),
                     'FromUserID': order.FromUserID,
                     'CardMessage': cardMessage(shipment),
                     'CSRID': order.xp.CSRID || 'Web', //id of csr order was placed by - only populated if placed in oms app
