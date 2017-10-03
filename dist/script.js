@@ -365,8 +365,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         // events are always a unique shipment
         _.each(shipments, function(shipment, sindex){
             _.each(shipment, function(lineitem, lindex){
-                //TODO: used a mock placeholder for xp identifying event. find out from Zeeshan what this xp value should be
-                if(lineitem.Product.xp.isEvent && shipment.length > 1){
+                if(lineitem.Product.xp.isWorkshopEvent && shipment.length > 1){
                     //splice event line items out of a shipment and into their own shipment
                     var event = shipments[sindex].splice(lindex, 1);
                     shipments.push(event);
@@ -524,7 +523,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     'ShipTo': li.ShippingAddress,
                     'StoreNumber': storeNumber(li), //web orders will be set to StoreNumber 3
                     'HandlingCost': shipment.deliveryFeesDtls['Handling Charges'], //cumulative li.xp.deliveryFeesDtls['Handling Charges']
-                    'DeliveryNote': li.xp.deliveryNote //TODO: once apps have refactored this to move up from li to shipment update here as well
+                    'DeliveryNote': li.xp.deliveryNote //TODO: once apps have been refactored move this up from li to shipment level
                 }
             };
             
