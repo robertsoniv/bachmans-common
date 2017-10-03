@@ -65,8 +65,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         // events are always a unique shipment
         _.each(shipments, function(shipment, sindex){
             _.each(shipment, function(lineitem, lindex){
-                //TODO: used a mock placeholder for xp identifying event. find out from Zeeshan what this xp value should be
-                if(lineitem.Product.xp.isEvent && shipment.length > 1){
+                if(lineitem.Product.xp.isWorkshopEvent && shipment.length > 1){
                     //splice event line items out of a shipment and into their own shipment
                     var event = shipments[sindex].splice(lindex, 1);
                     shipments.push(event);
@@ -202,26 +201,29 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                 'BuyerID': buyerid,
                 'ID': order.ID + '-' + (count < 10 ? '0' : '') + count,
                 'DateDelivered': null, // is set by integration once order is actually delivered
-                'Cost': shipment.Cost, //cumulative li.LineTotal for all li in this shipment
+                'Cost': shipment.Cost, //cumulative li.LineTotal
                 'Items': items,
                 'xp': {
                     'Status': status(li),
-                    'PrintStatus': printStatus(li),
+                    'PrintStatus': status(li) === 'OnHold' ? 'NotNeeded' : 'NotPrinted',
                     'Direction': 'Outgoing', //will always be outgoing if created in apps
                     'DeliveryMethod': deliveryMethod(li), //possible values: FTD, TFE, LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
                     'DateSubmitted': formatDate(order.DateSubmitted),
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
                     'RecipientName': li.ShippingAddress ? li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName : 'N/A',
-                    'SenderName': senderName(order),
+                    'SenderName': sender(order),
                     'FromUserID': order.FromUserID,
                     'CardMessage': cardMessage(shipment),
                     'CSRID': order.xp.CSRID || 'Web', //id of csr order was placed by - only populated if placed in oms app
-                    'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
-                    'DeliveryCharges': shipment.DeliveryCharges,
+                    'Tax': shipment.Tax, //cumulative li.xp.Tax
+                    'DeliveryCharges': shipment.DeliveryCharges, //see above for calculation
                     'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets sent to,
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
-                    'ShipTo': li.ShippingAddress
+                    'ShipTo': li.ShippingAddress,
+                    'StoreNumber': storeNumber(li), //web orders will be set to StoreNumber 3
+                    'HandlingCost': shipment.deliveryFeesDtls['Handling Charges'], //cumulative li.xp.deliveryFeesDtls['Handling Charges']
+                    'DeliveryNote': li.xp.deliveryNote //TODO: once apps have been refactored move this up from li to shipment level
                 }
             };
             
@@ -322,23 +324,30 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         return message || null;
     }
 
-    function senderName(order){
-        var isAnon = order.FromUserID === 'anon-template-user';
+    function sender(order){
+        var isAnon = order.FromUserID === '299999'; //TODO: make this more dynamic. If we have the constants named the same in all apps we can just inject and use that
+        var sender = _.pick(order.BillingAddress, ['FirstName', 'LastName', 'CompanyName', 'City', 'State', 'Zip', 'Phone']);
+        if(order.BillingAddress.xp && order.BillingAddress.xp.Email) sender.Email = order.BillingAddress.xp.Email;
 
-        if(isAnon && order.BillingAddress){
-            return order.BillingAddress.FirstName + ' ' + order.BillingAddress.LastName;
-        } else if(!isAnon){
-            return order.FromUser.FirstName + ' ' + order.FromUser.LastName;
-        } else {
-            return 'N/A';
+        if(!isAnon){
+            //get user info directly from user object if it exists
+            var fromUser = _.pick(order.FromUser, 'FirstName', 'LastName', 'Email', 'Phone');
+            _.each(fromUser, function(val, key){
+                if(val){
+                    sender[key] = val;
+                }
+            });
         }
+
+        return sender;
     }
 
-    function printStatus(li){
-        if( (li.xp.DeliveryMethod === 'LocalDelivery') || ( li.xp.DeliveryMethod === 'InStorePickup' && li.xp.ProductFromStore === 'OtherStore')) {
-            return 'NotPrinted';
+    function storeNumber(li){
+        if(li.ShippingAddress.xp && li.ShippingAddress.xp.StoreNumber){
+            return li.ShippingAddress.xp.StoreNumber;
         } else {
-            return 'NotNeeded';
+            //this is the store number for any web orders
+            return '3';
         }
     }
 
