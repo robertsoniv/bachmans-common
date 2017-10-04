@@ -522,6 +522,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
                     'ShipTo': li.ShippingAddress,
                     'StoreNumber': storeNumber(li), //web orders will be set to StoreNumber 3
+                    'EagleStoreNumber': eagleStoreNumber(li),
                     'HandlingCost': shipment.deliveryFeesDtls['Handling Charges'] || 0, //cumulative li.xp.deliveryFeesDtls['Handling Charges']
                     'DeliveryNote': li.xp.deliveryNote || null //TODO: once apps have been refactored move this up from li to shipment level
                 }
@@ -627,7 +628,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     function sender(order){
         var isAnon = order.FromUserID === '299999'; //TODO: make this more dynamic. If we have the constants named the same in all apps we can just inject and use that
         var sender = _.pick(order.BillingAddress, ['FirstName', 'LastName', 'CompanyName', 'City', 'State', 'Zip', 'Phone']);
-        if(order.BillingAddress.xp && order.BillingAddress.xp.Email) sender.Email = order.BillingAddress.xp.Email;
+        if(order.BillingAddress && order.BillingAddress.xp && order.BillingAddress.xp.Email) sender.Email = order.BillingAddress.xp.Email;
 
         if(!isAnon){
             //get user info directly from user object if it exists
@@ -643,8 +644,17 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     }
 
     function storeNumber(li){
-        if(li.ShippingAddress.xp && li.ShippingAddress.xp.StoreNumber){
+        if(li.ShippingAddress && li.ShippingAddress.xp && li.ShippingAddress.xp.StoreNumber){
             return li.ShippingAddress.xp.StoreNumber;
+        } else {
+            //this is the store number for any web orders
+            return '3';
+        }
+    }
+
+    function eagleStoreNumber(li){
+        if(li.ShippingAddress && li.ShippingAddress.xp && li.ShippingAddress.xp.EagleStoreNumber){
+            return li.ShippingAddress.xp.EagleStoreNumber;
         } else {
             //this is the store number for any web orders
             return '3';
