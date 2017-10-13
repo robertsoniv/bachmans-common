@@ -2,6 +2,153 @@ angular.module('bachmans-common', [
 
 ]);
 
+OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
+    .config(OrderCloudSDKBuyerXP);
+
+
+function OrderCloudSDKBuyerXP($provide){
+    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
+        $delegate.Buyers.Get = function(){
+            var token = $delegate.GetToken();
+            return bachBuyerXp.Get(token);
+        };
+
+        $delegate.Buyers.List = function(){
+            return $delegate.Buyers.Get()
+                .then(function(buyerxp){
+                    return {
+                        Items: [buyerxp], 
+                        Meta: {
+                            Page: 1, 
+                            PageSize: 1, 
+                            TotalPages: 1, 
+                            TotalCount: 1, 
+                            ItemRange: [1, 1]
+                        }
+                    };
+                });
+        };
+
+        $delegate.Buyers.Update = function(){
+            var update = [].slice.call(arguments)[1]; //update obj is second argument
+            var token = $delegate.GetToken();
+            if(update && update.xp) {
+                return bachBuyerXp.Update(token, update.xp);
+            } else {
+                return $q.reject('Missing body');
+            }
+        };
+
+        $delegate.Buyers.Patch = function(){
+            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
+            var token = $delegate.GetToken();
+            if(patch) {
+                return bachBuyerXp.Patch(token, patch);
+            } else {
+                return $q.reject('Missing body');
+            }
+        };
+
+        return $delegate;
+    }]);
+}
+
+lineItemThrottleDecorator.$inject = ['$provide'];angular.module('bachmans-common')
+    .config(lineItemThrottleDecorator)
+;
+
+//TODO: this is a temprorary solution to the performance issues described in BAC-778
+// Line item list calls will only actually call the API if they are at least 2 seconds apart
+// Any calls made closer together than two seconds will share the same response
+function lineItemThrottleDecorator($provide) {
+    $provide.decorator('OrderCloudSDK', ['$delegate', '$q', '$timeout', function($delegate, $q, $timeout) {
+        var originalLineItemList = $delegate.LineItems.List;
+        var originalDelete = $delegate.LineItems.Delete;
+        var originalUpdate = $delegate.LineItems.Update;
+        var originalPatch = $delegate.LineItems.Patch;
+        var originalCreate = $delegate.LineItems.Create;
+        var currentResponse, isError = false, running = false, cacheResponse = false;
+
+        function newLineItemsDelete() {
+            cacheResponse = false;
+            return originalDelete.apply($delegate, arguments);
+        }
+
+        function newLineItemsUpdate() {
+            cacheResponse = false;
+            return originalUpdate.apply($delegate, arguments);
+        }
+
+        function newLineItemsPatch() {
+            cacheResponse = false;
+            return originalPatch.apply($delegate, arguments);
+        }
+
+        function newLineItemsCreate() {
+            cacheResponse = false;
+            return originalCreate.apply($delegate, arguments);
+        }
+
+        function newLineItemsList() {
+            var df = $q.defer();
+
+            if (running) {
+                checkRunning();
+            } else if (cacheResponse) {
+                complete();
+            } else {
+                //No list call is currently cached or running so send a new request
+                running = true;
+                originalLineItemList.apply($delegate, arguments)
+                    .then(function(listResponse) {
+                        currentResponse = listResponse;
+                        isError = false;
+                        stopRunning();
+                        complete();
+                    })
+                    .catch(function(ex) {
+                        isError = true;
+                        stopRunning();
+                        complete();
+                    });
+            }
+
+            function stopRunning() {
+                cacheResponse = true;
+                running = false;
+                newCacheTimer();
+            }
+
+            function newCacheTimer() {
+                //Cache the response for 2 seconds
+                $timeout(function() {
+                    cacheResponse = false;
+                }, 3000);
+            }
+
+            function checkRunning() {
+                //Wait for the first request to complete and return it's result
+                $timeout(function() {
+                    running ? checkRunning() : complete();
+                }, 100);
+            }
+
+            function complete() {
+                isError ? df.reject(currentResponse) : df.resolve(currentResponse);
+            }
+
+            return df.promise;
+        }
+
+        $delegate.LineItems.List = newLineItemsList;
+        $delegate.LineItems.Delete = newLineItemsDelete;
+        $delegate.LineItems.Update = newLineItemsUpdate;
+        $delegate.LineItems.Patch = newLineItemsPatch;
+        $delegate.LineItems.Create = newLineItemsCreate;
+        return $delegate;
+    }]);
+}
+
 bachAssignments.$inject = ['nodeapiurl', '$resource', 'OrderCloudSDK'];angular.module('bachmans-common')
     .factory('bachAssignments', bachAssignments);
 
@@ -77,11 +224,19 @@ function bachBuyerXpService($q, $http, $interval, nodeapiurl){
     }
 
     function _update(token, update){
-        return $http.put(buyerxpurl, update, {headers: {'oc-token': token}});
+        return $http.put(buyerxpurl, update, {headers: {'oc-token': token}})
+            .then(function(response){
+                var buyer = {xp: response.data};
+                return buyer;
+            });
     }
 
     function _patch(patch, token){
-        return $http.patch(buyerxpurl, patch, {headers: {'oc-token': token}});
+        return $http.patch(buyerxpurl, patch, {headers: {'oc-token': token}})
+            .then(function(response){
+                var buyer = {xp: response.data};
+                return buyer;
+            });
     }
 
     return service;
@@ -148,7 +303,7 @@ bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK', 'bachWiredOrde
 ;
 
 function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachBuyerXp, $resource, nodeapiurl, appname){
-    var isSF = appname === 'BachmanStoreFront';
+
     var service = {
         Group: _group,
         GroupAndPatchLIs: _groupAndPatchLIs, //patches li.xp.Destination and li.xp.deliveryFeesDtls
@@ -210,7 +365,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         // events are always a unique shipment
         _.each(shipments, function(shipment, sindex){
             _.each(shipment, function(lineitem, lindex){
-                if(lineitem.Product.xp.isEvent && shipment.length > 1){
+                if(lineitem.Product.xp.isWorkshopEvent && shipment.length > 1){
                     //splice event line items out of a shipment and into their own shipment
                     var event = shipments[sindex].splice(lindex, 1);
                     shipments.push(event);
@@ -224,15 +379,15 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         var splitShipments = [];
         _.each(shipments, function(shipment){
             var wiredOrderSettings = bachBuyerXp.GetCache().xp.wireOrder.OutgoingOrders;
-            bachWiredOrders.DetermineEithers(shipment, wiredOrderSettings); //sets F or T for all li.xp.Destination
+            bachWiredOrders.DetermineEithers(shipment, wiredOrderSettings);
             
             var grouped = _.groupBy(shipment, function(li){
                 return li.xp.Destination;
             });
-            _.each(grouped, function(group, destination){
+            _.each(grouped, function(shipment, destination){
                 var isWiredShipment = destination === 'F' || destination === 'T';
                 if(isWiredShipment){
-                    _.each(group, function(li){
+                    _.each(shipment, function(li){
                         
                         _.each(li.xp.deliveryFeesDtls, function(charge, type){
                             var standardDeliveryCharges = [
@@ -246,7 +401,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                             ];
                             if(_.contains(standardDeliveryCharges, type)){
                                 //wired line items should not have standard delivery charges
-                                li.xp.deliveryFeesDtls[type] = 0; //set to 0 so we can avoid update and use patch
+                                li.xp.deliveryFeesDtls[type] = 0; //set to 0 so we can use patch
                             }
                                 //clear any previous charges
                             if(_.contains(['Wired Delivery Charges'], ['Wired Service Charges'])){
@@ -260,7 +415,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
                         shipment[0].xp.deliveryFeesDtls['Wired Service Charges'] = Number(wiredOrderSettings.WiredServiceFees);
                     });
                 }
-                splitShipments.push(group);
+                splitShipments.push(shipment);
             });
         });
         return shipmentTotals(splitShipments);
@@ -270,7 +425,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         _.each(shipments, function(shipment){
             shipment.Cost = 0;
             shipment.Tax = 0;
-            shipment.deliveryFeesDtls = {}; //cumulative unique delivery fees details object
+            shipment.deliveryFeesDtls = {}; //sum of li delivery fees at shipment level
 
             var standardDeliveryCharges = 0;
             var wiredCharges = 0;
@@ -316,7 +471,8 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
         var lineitems = _.flatten(shipments);
         _.each(lineitems, function(li){
             if(li.xp.Destination === 'F' || li.xp.Destination === 'T'){
-                //this can just lazy-update in the background (don't need return results, just updating on OC)
+                //don't need to wait for response because we have what the li's should be set to
+                var isSF = appname === 'BachmanStoreFront';
                 OrderCloudSDK.LineItems.Patch(isSF ? 'outgoing' : 'incoming', orderID, li.ID, {xp: {deliveryFeesDtls: li.xp.deliveryFeesDtls}});
             }
         });
@@ -324,7 +480,7 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     }
 
     function _create(lineitems, order){
-        var shipments = _groupAndPatchLIs(lineitems);
+        var shipments = _groupAndPatchLIs(lineitems, order.ID);
 
         var shipmentsQueue = [];
         _.each(shipments, function(shipment, index){
@@ -340,31 +496,35 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
             
             var count = index + 1;
             var li = shipment[0];
-            var isAnon = order.FromUserID === 'anon-template-user';
 
             var shipmentObj = {
                 'BuyerID': buyerid,
                 'ID': order.ID + '-' + (count < 10 ? '0' : '') + count,
                 'DateDelivered': null, // is set by integration once order is actually delivered
-                'Cost': shipment.Cost, //cumulative li.LineTotal for all li in this shipment
+                'Cost': shipment.Cost, //cumulative li.LineTotal
                 'Items': items,
                 'xp': {
                     'Status': status(li),
-                    'PrintStatus': printStatus(li),
-                    'Direction': 'Outgoing', //will always be outgoing if set from app
+                    'PrintStatus': status(li) === 'OnHold' ? 'NotNeeded' : 'NotPrinted',
+                    'Direction': 'Outgoing', //will always be outgoing if created in apps
                     'DeliveryMethod': deliveryMethod(li), //possible values: FTD, TFE, LocalDelivery, InStorePickUp, Courier, USPS, UPS, Event
                     'DateSubmitted': formatDate(order.DateSubmitted),
                     'RequestedDeliveryDate': formatDate(li.xp.DeliveryDate),
                     'addressType': li.xp.addressType, //possible values: Residence, Funeral, Cemetary, Church, School, Hospital, Business, InStorePickUp
-                    'RecipientName': li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName,
-                    'SenderName': isAnon ? order.BillingAddress.FirstName + ' ' + order.BillingAddress.LastName : order.Fromuser.FirstName + ' ' + order.FromUser.LastName,
+                    'RecipientName': li.ShippingAddress ? li.ShippingAddress.FirstName + ' ' + li.ShippingAddress.LastName : 'N/A',
+                    'Sender': sender(order),
                     'FromUserID': order.FromUserID,
-                    'CSRID': order.xp.CSRID || 'Web', //will be populated if placed on OMS
-                    'Tax': shipment.Tax, //cumulative li.xp.Tax for all li in this shipment
-                    'DeliveryCharges': shipment.DeliveryCharges,
-                    'RouteCode': li.xp.RouteCode, //alphanumeric code of the city its going to - determines which staging area product gets set to,
+                    'CardMessage': cardMessage(shipment),
+                    'CSRID': order.xp.CSRID || 'Web', //id of csr order was placed by - only populated if placed in oms app
+                    'Tax': shipment.Tax, //cumulative li.xp.Tax
+                    'DeliveryCharges': shipment.DeliveryCharges, //see above for calculation
+                    'RouteCode': li.xp.RouteCode || 'N/A', //alphanumeric code of the city its going to - determines which staging area product gets sent to,
                     'TimePreference': li.xp.deliveryRun || 'NO PREF', // when customer prefers to receive order,
-                    'ShipTo': li.ShippingAddress
+                    'ShipTo': li.ShippingAddress,
+                    'StoreNumber': storeNumber(li), //web orders will be set to StoreNumber 3
+                    'EagleStoreNumber': eagleStoreNumber(li),
+                    'HandlingCost': shipment.deliveryFeesDtls['Handling Charges'] || 0, //cumulative li.xp.deliveryFeesDtls['Handling Charges']
+                    'DeliveryNote': li.xp.deliveryNote || null //TODO: once apps have been refactored move this up from li to shipment level
                 }
             };
             
@@ -443,17 +603,61 @@ function bachShipmentsService($q, buyerid, OrderCloudSDK, bachWiredOrders, bachB
     function formatDate(datetime){
         if(datetime){
             var date = new Date(datetime);
-            return (date.getFullYear() +'-'+ date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1 +'-'+ (date.getDate() < 10 ? '0' + date.getDate() : date.getDate()));
+            var year = date.getFullYear();
+            var month = date.getMonth()+ 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1;
+            var day = date.getDate() < 10 ? '0' + date.getDate() : date.getDate();
+
+            //format: yyyy-mm-dd
+            return year +'-' + month +'-'+ day;
         } else {
             return 'N/A';
         }
     }
 
-    function printStatus(li){
-        if( (li.xp.DeliveryMethod === 'LocalDelivery') || ( li.xp.DeliveryMethod === 'InStorePickup' && li.xp.ProductFromStore === 'OtherStore')) {
-            return 'NotPrinted';
+    function cardMessage(shipment){
+        //gets card message from li that has the most lines filled out
+        var message = '';
+        _.each(shipment, function(li){
+            if(li.CardMessage && li.CardMessage.length && li.CardMessage.length > message.length){
+                message = li.CardMessage;
+            }
+        });
+        return message || null;
+    }
+
+    function sender(order){
+        var isAnon = order.FromUserID === '299999'; //TODO: make this more dynamic. If we have the constants named the same in all apps we can just inject and use that
+        var sender = _.pick(order.BillingAddress, ['FirstName', 'LastName', 'CompanyName', 'City', 'State', 'Zip', 'Phone']);
+        if(order.BillingAddress && order.BillingAddress.xp && order.BillingAddress.xp.Email) sender.Email = order.BillingAddress.xp.Email;
+
+        if(!isAnon){
+            //get user info directly from user object if it exists
+            var fromUser = _.pick(order.FromUser, 'FirstName', 'LastName', 'Email', 'Phone');
+            _.each(fromUser, function(val, key){
+                if(val){
+                    sender[key] = val;
+                }
+            });
+        }
+
+        return sender;
+    }
+
+    function storeNumber(li){
+        if(li.ShippingAddress && li.ShippingAddress.xp && li.ShippingAddress.xp.StoreNumber){
+            return li.ShippingAddress.xp.StoreNumber;
         } else {
-            return 'NotNeeded';
+            //this is the store number for any web orders
+            return '3';
+        }
+    }
+
+    function eagleStoreNumber(li){
+        if(li.ShippingAddress && li.ShippingAddress.xp && li.ShippingAddress.xp.EagleStoreNumber){
+            return li.ShippingAddress.xp.EagleStoreNumber;
+        } else {
+            //this is the store number for any web orders
+            return '3';
         }
     }
 
@@ -637,151 +841,4 @@ function bachWiredOrdersService($q) {
     }
 
     return service;
-}
-
-OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
-    .config(OrderCloudSDKBuyerXP);
-
-
-function OrderCloudSDKBuyerXP($provide){
-    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
-        $delegate.Buyers.Get = function(){
-            var token = $delegate.GetToken();
-            return bachBuyerXp.Get(token);
-        };
-
-        $delegate.Buyers.List = function(){
-            return $delegate.Buyers.Get()
-                .then(function(buyerxp){
-                    return {
-                        Items: [buyerxp], 
-                        Meta: {
-                            Page: 1, 
-                            PageSize: 1, 
-                            TotalPages: 1, 
-                            TotalCount: 1, 
-                            ItemRange: [1, 1]
-                        }
-                    };
-                });
-        };
-
-        $delegate.Buyers.Update = function(){
-            var update = [].slice.call(arguments)[1]; //update obj is second argument
-            var token = $delegate.GetToken();
-            if(update && update.xp) {
-                return bachBuyerXp.Update(token, update.xp);
-            } else {
-                return $q.reject('Missing body');
-            }
-        };
-
-        $delegate.Buyers.Patch = function(){
-            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
-            var token = $delegate.GetToken();
-            if(patch) {
-                return bachBuyerXp.Patch(token, patch);
-            } else {
-                return $q.reject('Missing body');
-            }
-        };
-
-        return $delegate;
-    }]);
-}
-
-lineItemThrottleDecorator.$inject = ['$provide'];angular.module('bachmans-common')
-    .config(lineItemThrottleDecorator)
-;
-
-//TODO: this is a temprorary solution to the performance issues described in BAC-778
-// Line item list calls will only actually call the API if they are at least 2 seconds apart
-// Any calls made closer together than two seconds will share the same response
-function lineItemThrottleDecorator($provide) {
-    $provide.decorator('OrderCloudSDK', ['$delegate', '$q', '$timeout', function($delegate, $q, $timeout) {
-        var originalLineItemList = $delegate.LineItems.List;
-        var originalDelete = $delegate.LineItems.Delete;
-        var originalUpdate = $delegate.LineItems.Update;
-        var originalPatch = $delegate.LineItems.Patch;
-        var originalCreate = $delegate.LineItems.Create;
-        var currentResponse, isError = false, running = false, cacheResponse = false;
-
-        function newLineItemsDelete() {
-            cacheResponse = false;
-            return originalDelete.apply($delegate, arguments);
-        }
-
-        function newLineItemsUpdate() {
-            cacheResponse = false;
-            return originalUpdate.apply($delegate, arguments);
-        }
-
-        function newLineItemsPatch() {
-            cacheResponse = false;
-            return originalPatch.apply($delegate, arguments);
-        }
-
-        function newLineItemsCreate() {
-            cacheResponse = false;
-            return originalCreate.apply($delegate, arguments);
-        }
-
-        function newLineItemsList() {
-            var df = $q.defer();
-
-            if (running) {
-                checkRunning();
-            } else if (cacheResponse) {
-                complete();
-            } else {
-                //No list call is currently cached or running so send a new request
-                running = true;
-                originalLineItemList.apply($delegate, arguments)
-                    .then(function(listResponse) {
-                        currentResponse = listResponse;
-                        isError = false;
-                        stopRunning();
-                        complete();
-                    })
-                    .catch(function(ex) {
-                        isError = true;
-                        stopRunning();
-                        complete();
-                    });
-            }
-
-            function stopRunning() {
-                cacheResponse = true;
-                running = false;
-                newCacheTimer();
-            }
-
-            function newCacheTimer() {
-                //Cache the response for 2 seconds
-                $timeout(function() {
-                    cacheResponse = false;
-                }, 3000);
-            }
-
-            function checkRunning() {
-                //Wait for the first request to complete and return it's result
-                $timeout(function() {
-                    running ? checkRunning() : complete();
-                }, 100);
-            }
-
-            function complete() {
-                isError ? df.reject(currentResponse) : df.resolve(currentResponse);
-            }
-
-            return df.promise;
-        }
-
-        $delegate.LineItems.List = newLineItemsList;
-        $delegate.LineItems.Delete = newLineItemsDelete;
-        $delegate.LineItems.Update = newLineItemsUpdate;
-        $delegate.LineItems.Patch = newLineItemsPatch;
-        $delegate.LineItems.Create = newLineItemsCreate;
-        return $delegate;
-    }]);
 }
