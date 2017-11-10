@@ -10,7 +10,7 @@ function _checkBalance(user) {
     var date = new Date();
     var expirationDate = new Date(date.getFullYear(), 3 * (Math.ceil((date.getMonth() + 1) / 3)), 1) - 1;     
     var purplePerks = {};
-    $http.post('https://Four51TRIAL104401.jitterbit.net/BachmansOnPrem/PurplePerksBalanceCheck', {
+    return $http.post('https://Four51TRIAL104401.jitterbit.net/BachmansOnPrem/PurplePerksBalanceCheck', {
         "card_number": "777777" + user.xp.LoyaltyID
     }).success(function(perks) {
         if (perks.card_value != "cardNumber not available" && perks.card_value > 0) {
