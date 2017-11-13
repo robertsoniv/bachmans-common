@@ -12,31 +12,30 @@ function _checkBalance(user) {
     var purplePerks = {};
     return $http.post('https://Four51TRIAL104401.jitterbit.net/BachmansOnPrem/PurplePerksBalanceCheck', {
         "card_number": "777777" + user.xp.LoyaltyID
-    }).success(function(perks) {
-        if (perks.card_value != "cardNumber not available" && perks.card_value > 0) {
-            purplePerks = {
-                Balance: Number(perks.card_value),
-                PointsEarned: perks.card_value,
-                CardNumber: "777777" + user.xp.LoyaltyID,
-                LoyaltyID: user.xp.LoyaltyID,
-                ExpirationDate: $filter('date')(expirationDate, 'MM/dd/yyyy')
+        }).success(function(perks) {
+            if (perks.card_value != "cardNumber not available" && perks.card_value > 0) {
+                purplePerks = {
+                    Balance: Number(perks.card_value),
+                    PointsEarned: perks.card_value,
+                    CardNumber: "777777" + user.xp.LoyaltyID,
+                    LoyaltyID: user.xp.LoyaltyID,
+                    ExpirationDate: $filter('date')(expirationDate, 'MM/dd/yyyy')
+                }
+            } else {
+                purplePerks = {
+                    Balance: 50,
+                    PointsEarned: 0,
+                    CardNumber: "777777" + user.xp.LoyaltyID,
+                    LoyaltyID: user.xp.LoyaltyID,
+                    ExpirationDate: $filter('date')(expirationDate, 'MM/dd/yyyy')
+                }
             }
-        } else {
-            purplePerks = {
-                Balance: 50,
-                PointsEarned: 0,
-                CardNumber: "777777" + user.xp.LoyaltyID,
-                LoyaltyID: user.xp.LoyaltyID,
-                ExpirationDate: $filter('date')(expirationDate, 'MM/dd/yyyy')
-            }
-        }
-        return purplePerks;
-    }).error(function(error) {
-        console.log(error);
-        return null;
-        
-    });
-}
-
-return service;
+            return purplePerks;
+        }).error(function(error) {
+            console.log(error);
+            return null;
+            
+        });
+    }
+    return service;
 }
