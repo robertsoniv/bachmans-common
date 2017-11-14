@@ -2,6 +2,153 @@ angular.module('bachmans-common', [
 
 ]);
 
+OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
+    .config(OrderCloudSDKBuyerXP);
+
+
+function OrderCloudSDKBuyerXP($provide){
+    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
+        $delegate.Buyers.Get = function(){
+            var token = $delegate.GetToken();
+            return bachBuyerXp.Get(token);
+        };
+
+        $delegate.Buyers.List = function(){
+            return $delegate.Buyers.Get()
+                .then(function(buyerxp){
+                    return {
+                        Items: [buyerxp], 
+                        Meta: {
+                            Page: 1, 
+                            PageSize: 1, 
+                            TotalPages: 1, 
+                            TotalCount: 1, 
+                            ItemRange: [1, 1]
+                        }
+                    };
+                });
+        };
+
+        $delegate.Buyers.Update = function(){
+            var update = [].slice.call(arguments)[1]; //update obj is second argument
+            var token = $delegate.GetToken();
+            if(update && update.xp) {
+                return bachBuyerXp.Update(token, update.xp);
+            } else {
+                return $q.reject('Missing body');
+            }
+        };
+
+        $delegate.Buyers.Patch = function(){
+            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
+            var token = $delegate.GetToken();
+            if(patch) {
+                return bachBuyerXp.Patch(token, patch);
+            } else {
+                return $q.reject('Missing body');
+            }
+        };
+
+        return $delegate;
+    }]);
+}
+
+lineItemThrottleDecorator.$inject = ['$provide'];angular.module('bachmans-common')
+    .config(lineItemThrottleDecorator)
+;
+
+//TODO: this is a temprorary solution to the performance issues described in BAC-778
+// Line item list calls will only actually call the API if they are at least 2 seconds apart
+// Any calls made closer together than two seconds will share the same response
+function lineItemThrottleDecorator($provide) {
+    $provide.decorator('OrderCloudSDK', ['$delegate', '$q', '$timeout', function($delegate, $q, $timeout) {
+        var originalLineItemList = $delegate.LineItems.List;
+        var originalDelete = $delegate.LineItems.Delete;
+        var originalUpdate = $delegate.LineItems.Update;
+        var originalPatch = $delegate.LineItems.Patch;
+        var originalCreate = $delegate.LineItems.Create;
+        var currentResponse, isError = false, running = false, cacheResponse = false;
+
+        function newLineItemsDelete() {
+            cacheResponse = false;
+            return originalDelete.apply($delegate, arguments);
+        }
+
+        function newLineItemsUpdate() {
+            cacheResponse = false;
+            return originalUpdate.apply($delegate, arguments);
+        }
+
+        function newLineItemsPatch() {
+            cacheResponse = false;
+            return originalPatch.apply($delegate, arguments);
+        }
+
+        function newLineItemsCreate() {
+            cacheResponse = false;
+            return originalCreate.apply($delegate, arguments);
+        }
+
+        function newLineItemsList() {
+            var df = $q.defer();
+
+            if (running) {
+                checkRunning();
+            } else if (cacheResponse) {
+                complete();
+            } else {
+                //No list call is currently cached or running so send a new request
+                running = true;
+                originalLineItemList.apply($delegate, arguments)
+                    .then(function(listResponse) {
+                        currentResponse = listResponse;
+                        isError = false;
+                        stopRunning();
+                        complete();
+                    })
+                    .catch(function(ex) {
+                        isError = true;
+                        stopRunning();
+                        complete();
+                    });
+            }
+
+            function stopRunning() {
+                cacheResponse = true;
+                running = false;
+                newCacheTimer();
+            }
+
+            function newCacheTimer() {
+                //Cache the response for 2 seconds
+                $timeout(function() {
+                    cacheResponse = false;
+                }, 3000);
+            }
+
+            function checkRunning() {
+                //Wait for the first request to complete and return it's result
+                $timeout(function() {
+                    running ? checkRunning() : complete();
+                }, 100);
+            }
+
+            function complete() {
+                isError ? df.reject(currentResponse) : df.resolve(currentResponse);
+            }
+
+            return df.promise;
+        }
+
+        $delegate.LineItems.List = newLineItemsList;
+        $delegate.LineItems.Delete = newLineItemsDelete;
+        $delegate.LineItems.Update = newLineItemsUpdate;
+        $delegate.LineItems.Patch = newLineItemsPatch;
+        $delegate.LineItems.Create = newLineItemsCreate;
+        return $delegate;
+    }]);
+}
+
 bachAssignments.$inject = ['nodeapiurl', '$resource', 'OrderCloudSDK'];angular.module('bachmans-common')
     .factory('bachAssignments', bachAssignments);
 
@@ -163,35 +310,34 @@ function _checkBalance(user) {
     var date = new Date();
     var expirationDate = new Date(date.getFullYear(), 3 * (Math.ceil((date.getMonth() + 1) / 3)), 1) - 1;     
     var purplePerks = {};
-    $http.post('https://Four51TRIAL104401.jitterbit.net/BachmansOnPrem/PurplePerksBalanceCheck', {
+    return $http.post('https://Four51TRIAL104401.jitterbit.net/BachmansOnPrem/PurplePerksBalanceCheck', {
         "card_number": "777777" + user.xp.LoyaltyID
-    }).success(function(perks) {
-        if (perks.card_value != "cardNumber not available" && perks.card_value > 0) {
-            purplePerks = {
-                Balance: Number(perks.card_value),
-                PointsEarned: perks.card_value,
-                CardNumber: "777777" + user.xp.LoyaltyID,
-                LoyaltyID: user.xp.LoyaltyID,
-                ExpirationDate: $filter('date')(expirationDate, 'MM/dd/yyyy')
+        }).success(function(perks) {
+            if (perks.card_value != "cardNumber not available" && perks.card_value > 0) {
+                purplePerks = {
+                    Balance: Number(perks.card_value),
+                    PointsEarned: perks.card_value,
+                    CardNumber: "777777" + user.xp.LoyaltyID,
+                    LoyaltyID: user.xp.LoyaltyID,
+                    ExpirationDate: $filter('date')(expirationDate, 'MM/dd/yyyy')
+                }
+            } else {
+                purplePerks = {
+                    Balance: 50,
+                    PointsEarned: 0,
+                    CardNumber: "777777" + user.xp.LoyaltyID,
+                    LoyaltyID: user.xp.LoyaltyID,
+                    ExpirationDate: $filter('date')(expirationDate, 'MM/dd/yyyy')
+                }
             }
-        } else {
-            purplePerks = {
-                Balance: 50,
-                PointsEarned: 0,
-                CardNumber: "777777" + user.xp.LoyaltyID,
-                LoyaltyID: user.xp.LoyaltyID,
-                ExpirationDate: $filter('date')(expirationDate, 'MM/dd/yyyy')
-            }
-        }
-        return purplePerks;
-    }).error(function(error) {
-        console.log(error);
-        return null;
-        
-    });
-}
-
-return service;
+            return purplePerks;
+        }).error(function(error) {
+            console.log(error);
+            return null;
+            
+        });
+    }
+    return service;
 }
 
 bachShipmentsService.$inject = ['$q', 'buyerid', 'OrderCloudSDK', 'bachWiredOrders', 'bachBuyerXp', '$resource', 'nodeapiurl', 'appname'];angular.module('bachmans-common')
@@ -737,151 +883,4 @@ function bachWiredOrdersService($q) {
     }
 
     return service;
-}
-
-OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
-    .config(OrderCloudSDKBuyerXP);
-
-
-function OrderCloudSDKBuyerXP($provide){
-    $provide.decorator('OrderCloudSDK', ['$delegate', 'bachBuyerXp', '$q', function($delegate, bachBuyerXp, $q){
-        $delegate.Buyers.Get = function(){
-            var token = $delegate.GetToken();
-            return bachBuyerXp.Get(token);
-        };
-
-        $delegate.Buyers.List = function(){
-            return $delegate.Buyers.Get()
-                .then(function(buyerxp){
-                    return {
-                        Items: [buyerxp], 
-                        Meta: {
-                            Page: 1, 
-                            PageSize: 1, 
-                            TotalPages: 1, 
-                            TotalCount: 1, 
-                            ItemRange: [1, 1]
-                        }
-                    };
-                });
-        };
-
-        $delegate.Buyers.Update = function(){
-            var update = [].slice.call(arguments)[1]; //update obj is second argument
-            var token = $delegate.GetToken();
-            if(update && update.xp) {
-                return bachBuyerXp.Update(token, update.xp);
-            } else {
-                return $q.reject('Missing body');
-            }
-        };
-
-        $delegate.Buyers.Patch = function(){
-            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
-            var token = $delegate.GetToken();
-            if(patch) {
-                return bachBuyerXp.Patch(token, patch);
-            } else {
-                return $q.reject('Missing body');
-            }
-        };
-
-        return $delegate;
-    }]);
-}
-
-lineItemThrottleDecorator.$inject = ['$provide'];angular.module('bachmans-common')
-    .config(lineItemThrottleDecorator)
-;
-
-//TODO: this is a temprorary solution to the performance issues described in BAC-778
-// Line item list calls will only actually call the API if they are at least 2 seconds apart
-// Any calls made closer together than two seconds will share the same response
-function lineItemThrottleDecorator($provide) {
-    $provide.decorator('OrderCloudSDK', ['$delegate', '$q', '$timeout', function($delegate, $q, $timeout) {
-        var originalLineItemList = $delegate.LineItems.List;
-        var originalDelete = $delegate.LineItems.Delete;
-        var originalUpdate = $delegate.LineItems.Update;
-        var originalPatch = $delegate.LineItems.Patch;
-        var originalCreate = $delegate.LineItems.Create;
-        var currentResponse, isError = false, running = false, cacheResponse = false;
-
-        function newLineItemsDelete() {
-            cacheResponse = false;
-            return originalDelete.apply($delegate, arguments);
-        }
-
-        function newLineItemsUpdate() {
-            cacheResponse = false;
-            return originalUpdate.apply($delegate, arguments);
-        }
-
-        function newLineItemsPatch() {
-            cacheResponse = false;
-            return originalPatch.apply($delegate, arguments);
-        }
-
-        function newLineItemsCreate() {
-            cacheResponse = false;
-            return originalCreate.apply($delegate, arguments);
-        }
-
-        function newLineItemsList() {
-            var df = $q.defer();
-
-            if (running) {
-                checkRunning();
-            } else if (cacheResponse) {
-                complete();
-            } else {
-                //No list call is currently cached or running so send a new request
-                running = true;
-                originalLineItemList.apply($delegate, arguments)
-                    .then(function(listResponse) {
-                        currentResponse = listResponse;
-                        isError = false;
-                        stopRunning();
-                        complete();
-                    })
-                    .catch(function(ex) {
-                        isError = true;
-                        stopRunning();
-                        complete();
-                    });
-            }
-
-            function stopRunning() {
-                cacheResponse = true;
-                running = false;
-                newCacheTimer();
-            }
-
-            function newCacheTimer() {
-                //Cache the response for 2 seconds
-                $timeout(function() {
-                    cacheResponse = false;
-                }, 3000);
-            }
-
-            function checkRunning() {
-                //Wait for the first request to complete and return it's result
-                $timeout(function() {
-                    running ? checkRunning() : complete();
-                }, 100);
-            }
-
-            function complete() {
-                isError ? df.reject(currentResponse) : df.resolve(currentResponse);
-            }
-
-            return df.promise;
-        }
-
-        $delegate.LineItems.List = newLineItemsList;
-        $delegate.LineItems.Delete = newLineItemsDelete;
-        $delegate.LineItems.Update = newLineItemsUpdate;
-        $delegate.LineItems.Patch = newLineItemsPatch;
-        $delegate.LineItems.Create = newLineItemsCreate;
-        return $delegate;
-    }]);
 }
