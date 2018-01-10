@@ -1,7 +1,7 @@
 angular.module('bachmans-common')
 .factory('bachPP', bachmansPurplePerks);
 
-function bachmansPurplePerks($http, $filter, $q) {
+function bachmansPurplePerks($http, $filter, $q, JitterBitBaseUrl) {
 var service = {
     CheckBalance: _checkBalance
 }
@@ -10,7 +10,7 @@ function _checkBalance(user) {
     var date = new Date();
     var defer = $q.defer();
     var expirationDate = new Date(date.getFullYear(), 3 * (Math.ceil((date.getMonth() + 1) / 3)), 1) - 1;     
-    $http.post('https://Four51TRIAL104401.jitterbit.net/BachmansOnPrem/PurplePerksBalanceCheck', {
+    $http.post(JitterBitBaseUrl + '/BachmansOnPrem/PurplePerksBalanceCheck', {
         "card_number": "777777" + user.xp.LoyaltyID
         }).then(function(perks) {
                 var purplePerks = {};
