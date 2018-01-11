@@ -298,10 +298,10 @@ function bachGiftCards(nodeapiurl, $resource, toastr, $http, OrderCloudSDK){
     return service;
 }
 
-bachmansPurplePerks.$inject = ['$http', '$filter', '$q'];angular.module('bachmans-common')
+bachmansPurplePerks.$inject = ['$http', '$filter', '$q', 'JitterBitBaseUrl', 'environment'];angular.module('bachmans-common')
 .factory('bachPP', bachmansPurplePerks);
 
-function bachmansPurplePerks($http, $filter, $q) {
+function bachmansPurplePerks($http, $filter, $q, JitterBitBaseUrl, environment) {
 var service = {
     CheckBalance: _checkBalance
 }
@@ -310,7 +310,7 @@ function _checkBalance(user) {
     var date = new Date();
     var defer = $q.defer();
     var expirationDate = new Date(date.getFullYear(), 3 * (Math.ceil((date.getMonth() + 1) / 3)), 1) - 1;     
-    $http.post('https://Four51TRIAL104401.jitterbit.net/BachmansOnPrem/PurplePerksBalanceCheck', {
+    $http.post(JitterBitBaseUrl + '/' + (environment === 'test' ? 'Test_BachmansOnPrem' : 'BachmansOnPrem') + '/PurplePerksBalanceCheck', {
         "card_number": "777777" + user.xp.LoyaltyID
         }).then(function(perks) {
                 var purplePerks = {};
