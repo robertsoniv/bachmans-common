@@ -252,7 +252,8 @@ function bachGiftCards(nodeapiurl, $resource, toastr, $http, OrderCloudSDK){
         Update: _update,
         Delete: _delete,
         List: _list,
-        Purchase: _purchase
+        Purchase: _purchase,
+        Release: _release
     };
 
     function _create(req){
@@ -277,6 +278,10 @@ function bachGiftCards(nodeapiurl, $resource, toastr, $http, OrderCloudSDK){
 
     function _purchase(req){
         return $http.post(nodeapiurl + '/giftcards/purchase/' + req.orderid, {}, {headers: {'oc-token': OrderCloudSDK.GetToken()}});
+    }
+
+    function _release(req) {
+        return $http.post(nodeapiurl + '/giftcards/release/' + req.orderid, {}, {headers: {'oc-token': OrderCloudSDK.GetToken()}});
     }
     
     function GiftCards(){
