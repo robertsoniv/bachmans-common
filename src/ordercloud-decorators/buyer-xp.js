@@ -3,10 +3,15 @@ angular.module('bachmans-common')
 
 
 function OrderCloudSDKBuyerXP($provide){
-    $provide.decorator('OrderCloudSDK', function($delegate, bachBuyerXp, $q){
+    $provide.decorator('OrderCloudSDK', function($delegate, $resource, $q, blobstorageurl, bachmansIntegrationsUrl){
         $delegate.Buyers.Get = function(){
-            var token = $delegate.GetToken();
-            return bachBuyerXp.Get(token);
+            return $resource(blobstorageurl + '/buyerxp.json', {}, {call: {
+                method: 'GET',
+                cache: false,
+                responseType: 'json'
+            }}).call().$promise.then(function(buyerxp) {
+                return {xp:buyerxp};
+            });
         };
 
         $delegate.Buyers.List = function(){
@@ -29,20 +34,21 @@ function OrderCloudSDKBuyerXP($provide){
             var update = [].slice.call(arguments)[1]; //update obj is second argument
             var token = $delegate.GetToken();
             if(update && update.xp) {
-                return bachBuyerXp.Update(token, update.xp);
+                return $resource(bachmansIntegrationsUrl + '/api/webdata/buyerxp', null, {call: {
+                    method: 'PUT',
+                    headers: {
+                        Authorization: 'Bearer ' + token
+                    }
+                }}).call(update.xp).$promise.then(function(){
+                    return $delegate.Buyers.Get();
+                });
             } else {
                 return $q.reject('Missing body');
             }
         };
 
-        $delegate.Buyers.Patch = function(){
-            var patch = [].slice.call(arguments)[1]; //patch obj is second argument
-            var token = $delegate.GetToken();
-            if(patch) {
-                return bachBuyerXp.Patch(token, patch);
-            } else {
-                return $q.reject('Missing body');
-            }
+        $delegate.Buyers.Patch = function(){ 
+            return $q.reject('Use Buyers.Update instead');
         };
 
         return $delegate;
