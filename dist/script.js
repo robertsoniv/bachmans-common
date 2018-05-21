@@ -9,7 +9,7 @@ OrderCloudSDKBuyerXP.$inject = ['$provide'];angular.module('bachmans-common')
 function OrderCloudSDKBuyerXP($provide){
     $provide.decorator('OrderCloudSDK', ['$delegate', '$resource', '$q', 'blobstorageurl', 'bachmansIntegrationsUrl', function($delegate, $resource, $q, blobstorageurl, bachmansIntegrationsUrl){
         $delegate.Buyers.Get = function(){
-            return $resource(blobstorageurl + '/buyerxp.json', {}, {call: {
+            return $resource(blobstorageurl + '/buyerxp.json', {'guid': guid()}, {call: {
                 method: 'GET',
                 cache: false,
                 responseType: 'json'
@@ -17,6 +17,15 @@ function OrderCloudSDKBuyerXP($provide){
                 return {xp:buyerxp};
             });
         };
+
+        function guid() {
+            function s4() {
+              return Math.floor((1 + Math.random()) * 0x10000)
+                .toString(16)
+                .substring(1);
+            }
+            return s4() + s4() + '-' + s4() + '-' + s4() + '-' + s4() + '-' + s4() + s4() + s4();
+          }
 
         $delegate.Buyers.List = function(){
             return $delegate.Buyers.Get()
